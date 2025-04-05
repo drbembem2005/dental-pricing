@@ -50,7 +50,7 @@ with tab1:
     st.dataframe(services_df)
     
     st.write("يمكنك تعديل أو إضافة خدمة عبر الجدول أدناه:")
-    edited_services = st.experimental_data_editor(services_df, num_rows="dynamic")
+    edited_services = st.data_editor(services_df, num_rows="dynamic")
     
     st.header("3. إعداد هامش الربح")
     margin = st.slider("هامش الربح المطلوب (%)", min_value=0, max_value=100, value=30) / 100.0
