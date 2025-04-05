@@ -1,152 +1,141 @@
 import streamlit as st
 import matplotlib.pyplot as plt
+import pandas as pd
 
-# -------------------------------
-# Core Functions
-# -------------------------------
+st.title("تحليل تسعير مفصل لعيادة الأسنان")
 
-def pricing_analysis(fixed_cost, variable_cost_per_case, expected_cases, margin=0.3):
-    """
-    Calculate pricing parameters for a dental clinic service.
-    
-    Parameters:
-      fixed_cost (float): Total fixed monthly costs.
-      variable_cost_per_case (float): Variable cost per case.
-      expected_cases (int): Expected number of cases per month.
-      margin (float): Desired profit margin (e.g., 0.3 for 30%).
-    
-    Returns:
-      tuple: (fixed_cost_per_case, total_cost_per_case, price_per_case, break_even_point)
-    """
-    # Calculate fixed cost allocated per case
-    fixed_cost_per_case = fixed_cost / expected_cases
-    
-    # Total cost per case = variable cost + allocated fixed cost
-    total_cost_per_case = variable_cost_per_case + fixed_cost_per_case
-    
-    # Final price after adding profit margin
-    price_per_case = total_cost_per_case * (1 + margin)
-    
-    # Contribution margin per case = price - variable cost
-    contribution_margin = calculate_contribution_margin(price_per_case, variable_cost_per_case)
-    
-    # Break-even point = fixed_cost / contribution margin per case
-    break_even_point = fixed_cost / contribution_margin
-    
-    return fixed_cost_per_case, total_cost_per_case, price_per_case, break_even_point
+# إنشاء تاب لتفاصيل البيانات وتفاصيل الخدمات
+tab1, tab2 = st.tabs(["إدخال البيانات التفصيلية", "التحليلات والرسوم البيانية"])
 
-def calculate_contribution_margin(price, variable_cost):
-    """
-    Calculate the contribution margin per case.
-    
-    Parameters:
-      price (float): Final price per case.
-      variable_cost (float): Variable cost per case.
-    
-    Returns:
-      float: Contribution margin.
-    """
-    return price - variable_cost
-
-def simulate_scenarios(fixed_cost, variable_cost_per_case, margin, cases_range):
-    """
-    Simulate pricing analysis for a range of expected cases.
-    
-    Parameters:
-      fixed_cost (float): Total fixed costs.
-      variable_cost_per_case (float): Variable cost per case.
-      margin (float): Desired profit margin.
-      cases_range (iterable): A range or list of expected cases values.
-    
-    Returns:
-      dict: Dictionary containing lists of expected_cases, prices, and break-even points.
-    """
-    results = {
-        "expected_cases": [],
-        "price_per_case": [],
-        "break_even_point": []
-    }
-    
-    for cases in cases_range:
-        fixed_per_case, total_cost, price, break_even = pricing_analysis(
-            fixed_cost, variable_cost_per_case, cases, margin
-        )
-        results["expected_cases"].append(cases)
-        results["price_per_case"].append(price)
-        results["break_even_point"].append(break_even)
-    
-    return results
-
-def plot_sensitivity(results):
-    """
-    Plot the sensitivity of final price and break-even point against the number of expected cases.
-    
-    Parameters:
-      results (dict): Dictionary returned by simulate_scenarios containing expected_cases, price_per_case, and break_even_point.
-      
-    Returns:
-      Matplotlib figure object.
-    """
-    fig, axs = plt.subplots(1, 2, figsize=(12, 6))
-    
-    # Plot final price per case vs expected cases
-    axs[0].plot(results["expected_cases"], results["price_per_case"], marker='o', color='b')
-    axs[0].set_xlabel("Expected Cases per Month")
-    axs[0].set_ylabel("Final Price per Case (Ghem)")
-    axs[0].set_title("Final Price vs Expected Cases")
-    axs[0].grid(True)
-    
-    # Plot break-even point vs expected cases
-    axs[1].plot(results["expected_cases"], results["break_even_point"], marker='o', color='r')
-    axs[1].set_xlabel("Expected Cases per Month")
-    axs[1].set_ylabel("Break-even Point (Cases)")
-    axs[1].set_title("Break-even Point vs Expected Cases")
-    axs[1].grid(True)
-    
-    plt.tight_layout()
-    return fig
-
-# -------------------------------
-# Streamlit App Layout
-# -------------------------------
-
-st.title("Dental Clinic Pricing Analysis")
-
-# Create two tabs: one for basic pricing and one for analytics
-tab1, tab2 = st.tabs(["Pricing Analysis", "Analytics"])
-
-# -------------------------------
-# Tab 1: Pricing Analysis
-# -------------------------------
+# -----------------------------
+# تبويب إدخال البيانات التفصيلية
+# -----------------------------
 with tab1:
-    st.header("Enter Your Clinic Data")
+    st.header("1. إدخال التكاليف الثابتة")
+    st.write("أدخل تفاصيل المصاريف الثابتة للعيادة:")
     
-    fixed_cost = st.number_input("Total Fixed Costs (Ghem)", min_value=0.0, value=42000.0, step=1000.0)
-    variable_cost = st.number_input("Variable Cost per Case (Ghem)", min_value=0.0, value=300.0, step=10.0)
-    expected_cases = st.number_input("Expected Cases per Month", min_value=1, value=200, step=1)
-    margin = st.slider("Desired Profit Margin (%)", min_value=0, max_value=100, value=30) / 100.0
+    rent = st.number_input("إيجار العيادة (جنيه)", min_value=0.0, value=15000.0, step=500.0)
+    salaries = st.number_input("رواتب العاملين (جنيه)", min_value=0.0, value=20000.0, step=500.0)
+    utilities = st.number_input("فواتير الخدمات (كهرباء، ماء، إنترنت) (جنيه)", min_value=0.0, value=5000.0, step=200.0)
+    insurance = st.number_input("تأمين وصيانة (جنيه)", min_value=0.0, value=2000.0, step=100.0)
+    marketing = st.number_input("تكاليف تسويق وإعلان (جنيه)", min_value=0.0, value=1000.0, step=100.0)
     
-    if st.button("Calculate Pricing"):
-        fixed_per_case, total_cost, price, break_even = pricing_analysis(fixed_cost, variable_cost, expected_cases, margin)
-        st.subheader("Results")
-        st.write(f"**Fixed Cost per Case:** {fixed_per_case:.2f} Ghem")
-        st.write(f"**Total Cost per Case:** {total_cost:.2f} Ghem")
-        st.write(f"**Final Price per Case (with {margin*100:.0f}% margin):** {price:.2f} Ghem")
-        st.write(f"**Break-even Point (Number of Cases):** {break_even:.2f}")
+    total_fixed_cost = rent + salaries + utilities + insurance + marketing
+    st.write(f"**إجمالي التكاليف الثابتة للعيادة:** {total_fixed_cost:.2f} جنيه")
+    
+    st.header("2. إدخال بيانات الخدمات")
+    st.write("أدخل تفاصيل كل خدمة تقدمها العيادة:")
+    
+    num_services = st.number_input("عدد أنواع الخدمات", min_value=1, value=3, step=1)
+    
+    # إنشاء قائمة لتخزين بيانات الخدمات
+    services = []
+    for i in range(int(num_services)):
+        st.subheader(f"الخدمة {i+1}")
+        service_name = st.text_input(f"اسم الخدمة {i+1}", value=f"الخدمة {i+1}", key=f"name_{i}")
+        expected_cases = st.number_input(f"عدد الحالات المتوقع تنفيذها شهرياً ({service_name})", min_value=1, value=50, step=1, key=f"cases_{i}")
+        variable_cost = st.number_input(f"التكلفة المتغيرة لكل حالة ({service_name}) (جنيه)", min_value=0.0, value=300.0, step=10.0, key=f"var_{i}")
+        services.append({
+            "name": service_name,
+            "expected_cases": expected_cases,
+            "variable_cost": variable_cost
+        })
+        
+    margin = st.slider("هامش الربح المطلوب (%)", min_value=0, max_value=100, value=30) / 100.0
 
-# -------------------------------
-# Tab 2: Analytics
-# -------------------------------
+    if st.button("احسب التسعير التفصيلي"):
+        # حساب إجمالي عدد الحالات لجميع الخدمات
+        total_expected_cases = sum([s["expected_cases"] for s in services])
+        
+        results = []
+        for s in services:
+            # توزيع التكاليف الثابتة بناءً على نسبة عدد الحالات
+            allocated_fixed_cost = total_fixed_cost * (s["expected_cases"] / total_expected_cases)
+            fixed_cost_per_case = allocated_fixed_cost / s["expected_cases"]
+            total_cost_per_case = s["variable_cost"] + fixed_cost_per_case
+            price_per_case = total_cost_per_case * (1 + margin)
+            contribution_margin = price_per_case - s["variable_cost"]
+            break_even = allocated_fixed_cost / contribution_margin if contribution_margin > 0 else 0
+            
+            s.update({
+                "allocated_fixed_cost": allocated_fixed_cost,
+                "fixed_cost_per_case": fixed_cost_per_case,
+                "total_cost_per_case": total_cost_per_case,
+                "price_per_case": price_per_case,
+                "break_even": break_even
+            })
+            results.append(s)
+        
+        # عرض النتائج في جدول
+        df = pd.DataFrame(results)
+        df = df.rename(columns={
+            "name": "اسم الخدمة",
+            "expected_cases": "عدد الحالات المتوقعة",
+            "variable_cost": "التكلفة المتغيرة لكل حالة",
+            "allocated_fixed_cost": "التكاليف الثابتة المخصصة",
+            "fixed_cost_per_case": "التكلفة الثابتة لكل حالة",
+            "total_cost_per_case": "التكلفة الإجمالية لكل حالة",
+            "price_per_case": "السعر النهائي لكل حالة",
+            "break_even": "نقطة التعادل (عدد الحالات)"
+        })
+        st.subheader("نتائج التحليل التفصيلي لكل خدمة")
+        st.dataframe(df.style.format({
+            "التكلفة المتغيرة لكل حالة": "{:.2f}",
+            "التكلفة الثابتة لكل حالة": "{:.2f}",
+            "التكلفة الإجمالية لكل حالة": "{:.2f}",
+            "السعر النهائي لكل حالة": "{:.2f}",
+            "نقطة التعادل (عدد الحالات)": "{:.2f}",
+            "التكاليف الثابتة المخصصة": "{:.2f}"
+        }))
+
+# -----------------------------
+# تبويب التحليلات والرسوم البيانية
+# -----------------------------
 with tab2:
-    st.header("Sensitivity Analysis")
-    st.write("Explore how changes in the expected number of cases affect the pricing and break-even point.")
+    st.header("التحليلات والرسوم البيانية")
+    st.write("يمكنك استكشاف حساسية النتائج لتغير عدد الحالات لكل خدمة.")
     
-    min_cases = st.number_input("Minimum Expected Cases", min_value=1, value=100, step=1, key="min")
-    max_cases = st.number_input("Maximum Expected Cases", min_value=1, value=300, step=1, key="max")
-    step_cases = st.number_input("Step", min_value=1, value=20, step=1, key="step")
+    selected_service = st.selectbox("اختر الخدمة للتحليل", [s["name"] for s in services] if services else [])
     
-    if st.button("Run Sensitivity Analysis"):
+    if selected_service:
+        # إيجاد بيانات الخدمة المحددة
+        service_data = next(s for s in services if s["name"] == selected_service)
+        # نعمل تحليل لحساسية السعر ونقطة التعادل بتغير عدد الحالات
+        min_cases = st.number_input("أقل عدد للحالات", min_value=1, value=10, step=1, key="min_cases")
+        max_cases = st.number_input("أعلى عدد للحالات", min_value=1, value=200, step=1, key="max_cases")
+        step_cases = st.number_input("الخطوة", min_value=1, value=10, step=1, key="step_cases")
+        
+        def sensitivity_analysis(variable_cost, allocated_fixed_cost, margin, cases_range):
+            prices = []
+            break_evens = []
+            for cases in cases_range:
+                # إعادة توزيع الثابت على أساس عدد الحالات الجديدة
+                fixed_cost_per_case = allocated_fixed_cost / cases
+                total_cost = variable_cost + fixed_cost_per_case
+                price = total_cost * (1 + margin)
+                contribution_margin = price - variable_cost
+                be = allocated_fixed_cost / contribution_margin if contribution_margin > 0 else 0
+                prices.append(price)
+                break_evens.append(be)
+            return prices, break_evens
+        
         cases_range = range(int(min_cases), int(max_cases)+1, int(step_cases))
-        results = simulate_scenarios(fixed_cost, variable_cost, margin, cases_range)
-        fig = plot_sensitivity(results)
+        prices, break_evens = sensitivity_analysis(service_data["variable_cost"],
+                                                     service_data["allocated_fixed_cost"],
+                                                     margin,
+                                                     cases_range)
+        # رسم البيانات باستخدام matplotlib
+        fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+        axs[0].plot(list(cases_range), prices, marker='o', color='b')
+        axs[0].set_title("السعر النهائي مقابل عدد الحالات")
+        axs[0].set_xlabel("عدد الحالات")
+        axs[0].set_ylabel("السعر النهائي لكل حالة")
+        axs[0].grid(True)
+        
+        axs[1].plot(list(cases_range), break_evens, marker='o', color='r')
+        axs[1].set_title("نقطة التعادل مقابل عدد الحالات")
+        axs[1].set_xlabel("عدد الحالات")
+        axs[1].set_ylabel("نقطة التعادل (عدد الحالات)")
+        axs[1].grid(True)
+        
         st.pyplot(fig)
