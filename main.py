@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from typing import List, Dict, Any, Tuple, Optional
 import copy
+# import numpy as np # Uncomment if using numpy alternative for calculations
 
 # --- Constants ---
 # Define column names
@@ -19,73 +20,65 @@ COL_BREAK_EVEN = "break_even"
 COL_SERVICE_HOURS = "service_hours"
 
 # Define keys for session state
-STATE_SERVICES_DF = "services_df" # <-- Store services as a DataFrame
-STATE_EDIT_TARGET_INDEX = "edit_target_index" # <-- Store index of row being edited
-STATE_RESULTS_DF = "results_df"
-STATE_TOTAL_FIXED_COST = "total_fixed_cost"
-STATE_MARGIN = "margin"
-STATE_CALCULATED = "calculated"
+STATE_SERVICES_DF = "services_df" # Main DataFrame for service inputs
+STATE_EDIT_TARGET_INDEX = "edit_target_index" # Index of row being edited
+STATE_RESULTS_DF = "results_df" # DataFrame for calculated results
+STATE_CALCULATED_FIXED_COST = "calculated_fixed_cost" # Store fixed cost used for last calc
+STATE_CALCULATED_MARGIN = "calculated_margin" # Store margin used for last calc
+STATE_CALCULATED = "calculated" # Flag
 
-# --- Helper Functions ---
+# --- Helper Functions (Implementations are the same as previous version) ---
 
 def initialize_session_state():
     """Initializes required keys in Streamlit's session state."""
-    # Default data
     default_services_data = [
-        {"name": "تنظيف الأسنان", "expected_cases": 80, "variable_cost": 150.0, "duration_hours": 1.0},
-        {"name": "حشو الأسنان", "expected_cases": 60, "variable_cost": 250.0, "duration_hours": 1.0},
-        {"name": "علاج جذور الأسنان", "expected_cases": 40, "variable_cost": 500.0, "duration_hours": 2.0},
-        {"name": "تقويم الأسنان", "expected_cases": 20, "variable_cost": 1000.0, "duration_hours": 2.0},
-        {"name": "تبييض الأسنان", "expected_cases": 50, "variable_cost": 350.0, "duration_hours": 1.0},
-        {"name": "زراعة الأسنان", "expected_cases": 10, "variable_cost": 3000.0, "duration_hours": 3.0}
+        {"name": "Dental Cleaning", "expected_cases": 80, "variable_cost": 150.0, "duration_hours": 1.0},
+        {"name": "Filling", "expected_cases": 60, "variable_cost": 250.0, "duration_hours": 1.0},
+        {"name": "Root Canal Therapy", "expected_cases": 40, "variable_cost": 500.0, "duration_hours": 2.0},
+        {"name": "Orthodontics (Braces Setup)", "expected_cases": 20, "variable_cost": 1000.0, "duration_hours": 2.0},
+        {"name": "Teeth Whitening", "expected_cases": 50, "variable_cost": 350.0, "duration_hours": 1.0},
+        {"name": "Dental Implant", "expected_cases": 10, "variable_cost": 3000.0, "duration_hours": 3.0}
     ]
     if STATE_SERVICES_DF not in st.session_state:
-        # Store as a DataFrame
         st.session_state[STATE_SERVICES_DF] = pd.DataFrame(default_services_data)
+        # Ensure correct types on initialization
+        st.session_state[STATE_SERVICES_DF][COL_EXPECTED_CASES] = st.session_state[STATE_SERVICES_DF][COL_EXPECTED_CASES].astype(int)
+        st.session_state[STATE_SERVICES_DF][COL_VAR_COST] = st.session_state[STATE_SERVICES_DF][COL_VAR_COST].astype(float)
+        st.session_state[STATE_SERVICES_DF][COL_DURATION] = st.session_state[STATE_SERVICES_DF][COL_DURATION].astype(float)
+
 
     if STATE_EDIT_TARGET_INDEX not in st.session_state:
-        st.session_state[STATE_EDIT_TARGET_INDEX] = None # No row selected for edit initially
-
+        st.session_state[STATE_EDIT_TARGET_INDEX] = None
     if STATE_RESULTS_DF not in st.session_state:
         st.session_state[STATE_RESULTS_DF] = None
-    if STATE_TOTAL_FIXED_COST not in st.session_state:
-        st.session_state[STATE_TOTAL_FIXED_COST] = 0.0
-    if STATE_MARGIN not in st.session_state:
-        st.session_state[STATE_MARGIN] = 0.30
+    if STATE_CALCULATED_FIXED_COST not in st.session_state:
+        st.session_state[STATE_CALCULATED_FIXED_COST] = 0.0
+    if STATE_CALCULATED_MARGIN not in st.session_state:
+        st.session_state[STATE_CALCULATED_MARGIN] = 0.30 # Default 30%
     if STATE_CALCULATED not in st.session_state:
         st.session_state[STATE_CALCULATED] = False
 
-# --- Calculation functions remain largely the same, but accept DataFrame ---
-def calculate_detailed_pricing(
-    services_df: pd.DataFrame, # <-- Accepts DataFrame directly
-    total_fixed_cost: float,
-    margin: float
-) -> Optional[pd.DataFrame]:
-    """
-    Calculates detailed pricing, cost allocation, and break-even points for services.
-    """
+def calculate_detailed_pricing(services_df: pd.DataFrame, total_fixed_cost: float, margin: float) -> Optional[pd.DataFrame]:
+    """Calculates detailed pricing, cost allocation, and break-even points."""
     if services_df.empty:
-        st.error("لا توجد بيانات خدمات لإجراء الحسابات. يرجى إضافة خدمة واحدة على الأقل.")
+        st.error("No service data available for calculation. Please add at least one service.")
         return None
 
-    # Create a working copy to avoid modifying the original session state DataFrame directly
-    calc_df = services_df.copy()
+    calc_df = services_df.copy() # Work on a copy
 
-    # Data type conversion and validation
+    # --- Data Type Conversion and Validation ---
     try:
-        # Use pd.to_numeric for robust conversion, fill errors with 0 or NaN then handle
         calc_df[COL_EXPECTED_CASES] = pd.to_numeric(calc_df[COL_EXPECTED_CASES], errors='coerce').fillna(0).astype(int)
         calc_df[COL_VAR_COST] = pd.to_numeric(calc_df[COL_VAR_COST], errors='coerce').fillna(0.0).astype(float)
         calc_df[COL_DURATION] = pd.to_numeric(calc_df[COL_DURATION], errors='coerce').fillna(0.0).astype(float)
 
-        # Check for invalid values after conversion
         if (calc_df[COL_EXPECTED_CASES] < 0).any() or \
            (calc_df[COL_VAR_COST] < 0).any() or \
            (calc_df[COL_DURATION] <= 0).any():
-             st.error("يرجى التأكد من أن عدد الحالات والتكلفة المتغيرة ليست سالبة، وأن مدة الخدمة أكبر من صفر في جميع الصفوف.")
+             st.error("Please ensure 'Expected Cases' and 'Variable Cost' are not negative, and 'Duration' is greater than zero for all services.")
              return None
     except Exception as e:
-        st.error(f"خطأ في تحويل أنواع بيانات الخدمات: {e}. يرجى التحقق من الإدخالات.")
+        st.error(f"Data type error in service data: {e}. Please check inputs.")
         return None
 
     # --- Calculations ---
@@ -93,239 +86,252 @@ def calculate_detailed_pricing(
     total_service_hours = calc_df[COL_SERVICE_HOURS].sum()
 
     if total_service_hours <= 0:
-        st.warning("إجمالي ساعات الخدمة (الوزن) هو صفر أو أقل. لا يمكن توزيع التكاليف الثابتة بشكل فعال.")
+        st.warning("Total weighted service hours is zero or negative. Cannot allocate fixed costs effectively. Fixed costs per case set to 0.")
         calc_df[COL_ALLOC_FIXED_COST] = 0.0
         calc_df[COL_FIXED_COST_PER_CASE] = 0.0
     else:
         calc_df[COL_ALLOC_FIXED_COST] = total_fixed_cost * (calc_df[COL_SERVICE_HOURS] / total_service_hours)
-        # Use .loc for safer assignment and division by zero handling
         calc_df[COL_FIXED_COST_PER_CASE] = calc_df.apply(
-             lambda row: row[COL_ALLOC_FIXED_COST] / row[COL_EXPECTED_CASES] if row[COL_EXPECTED_CASES] > 0 else 0,
-             axis=1
-         )
-        # Alternative using numpy.where for potential speedup on large DFs
-        # calc_df[COL_FIXED_COST_PER_CASE] = np.where(
-        #     calc_df[COL_EXPECTED_CASES] > 0,
-        #     calc_df[COL_ALLOC_FIXED_COST] / calc_df[COL_EXPECTED_CASES],
-        #     0
-        # )
-
+             lambda row: row[COL_ALLOC_FIXED_COST] / row[COL_EXPECTED_CASES] if row[COL_EXPECTED_CASES] > 0 else 0, axis=1)
 
     calc_df[COL_TOTAL_COST_PER_CASE] = calc_df[COL_VAR_COST] + calc_df[COL_FIXED_COST_PER_CASE]
     calc_df[COL_PRICE_PER_CASE] = calc_df[COL_TOTAL_COST_PER_CASE] * (1 + margin)
     calc_df[COL_CONTRIB_MARGIN] = calc_df[COL_PRICE_PER_CASE] - calc_df[COL_VAR_COST]
-
-    # Use .loc for safer assignment and division by zero handling for BE
     calc_df[COL_BREAK_EVEN] = calc_df.apply(
-         lambda row: row[COL_ALLOC_FIXED_COST] / row[COL_CONTRIB_MARGIN] if row[COL_CONTRIB_MARGIN] > 0 else float('inf'),
-         axis=1
-     )
-    # Alternative using numpy.where
-    # calc_df[COL_BREAK_EVEN] = np.where(
-    #     calc_df[COL_CONTRIB_MARGIN] > 0,
-    #     calc_df[COL_ALLOC_FIXED_COST] / calc_df[COL_CONTRIB_MARGIN],
-    #     float('inf')
-    # )
+        lambda row: row[COL_ALLOC_FIXED_COST] / row[COL_CONTRIB_MARGIN] if row[COL_CONTRIB_MARGIN] > 0 else float('inf'), axis=1)
+
+    # Add service name in English if original is Arabic for analysis tab dropdown
+    # This assumes the initial names might be Arabic. Adjust if needed.
+    # calc_df['name_en'] = calc_df[COL_NAME].apply(lambda x: f"Service_{x}" if isinstance(x, str) and any('\u0600' <= c <= '\u06FF' for c in x) else x)
+
 
     return calc_df
 
-# Sensitivity calculation function remains the same
-def calculate_sensitivity(
-    variable_cost: float, allocated_fixed_cost: float, margin: float, cases_range: range
-) -> Tuple[List[float], List[float]]:
-    # ... (implementation is identical to previous versions) ...
+def calculate_sensitivity(variable_cost: float, allocated_fixed_cost: float, margin: float, cases_range: range) -> Tuple[List[float], List[float]]:
+    """Calculates price and break-even sensitivity based on varying case numbers."""
+    # ... (Implementation is identical to previous versions) ...
     prices = []
     break_evens = []
     for cases in cases_range:
         if cases <= 0:
-            price = float('inf')
-            be = float('inf')
+            price = float('inf'); be = float('inf')
         else:
             fixed_cost_per_case = allocated_fixed_cost / cases
             total_cost = variable_cost + fixed_cost_per_case
             price = total_cost * (1 + margin)
             contribution_margin = price - variable_cost
-            if contribution_margin <= 0:
-                be = float('inf')
-            else:
-                be = allocated_fixed_cost / contribution_margin
+            be = allocated_fixed_cost / contribution_margin if contribution_margin > 0 else float('inf')
         prices.append(price)
         break_evens.append(be)
     return prices, break_evens
 
-
-# Plotting function with English labels remains the same
 def plot_sensitivity(cases_range: List[int], prices: List[float], break_evens: List[float]) -> plt.Figure:
-    # ... (implementation is identical to previous versions with English labels) ...
-    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+    """Generates Matplotlib plots for sensitivity analysis with ENGLISH labels."""
+    # ... (Implementation is identical to previous versions with English labels) ...
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
 
     # Plot Price Sensitivity
     axs[0].plot(cases_range, prices, marker='o', linestyle='-', color='royalblue')
-    axs[0].set_title("Price Sensitivity vs. Number of Cases") # English
-    axs[0].set_xlabel("Number of Cases") # English
-    axs[0].set_ylabel("Calculated Price per Case (EGP)") # English
+    axs[0].set_title("Price Sensitivity vs. Number of Cases")
+    axs[0].set_xlabel("Number of Cases")
+    axs[0].set_ylabel("Calculated Price per Case (EGP)")
     axs[0].grid(True, linestyle='--', alpha=0.6)
     axs[0].ticklabel_format(style='plain', axis='y')
 
     # Plot Break-even Sensitivity
     axs[1].plot(cases_range, break_evens, marker='x', linestyle='--', color='crimson')
-    axs[1].set_title("Break-Even Point vs. Number of Cases") # English
-    axs[1].set_xlabel("Number of Cases") # English
-    axs[1].set_ylabel("Calculated Break-Even Point (Cases)") # English
+    axs[1].set_title("Break-Even Point vs. Number of Cases")
+    axs[1].set_xlabel("Number of Cases")
+    axs[1].set_ylabel("Calculated Break-Even Point (Cases)")
     axs[1].grid(True, linestyle='--', alpha=0.6)
     finite_bes = [be for be in break_evens if be != float('inf')]
     if finite_bes:
-        axs[1].set_ylim(bottom=0, top=max(finite_bes) * 1.1 if finite_bes else 10)
+        axs[1].set_ylim(bottom=0, top=max(finite_bes) * 1.15 if finite_bes else 10) # Added bit more padding
     else:
         axs[1].set_ylim(bottom=0)
     axs[1].ticklabel_format(style='plain', axis='y')
 
-    fig.tight_layout(pad=3.0)
+    # fig.tight_layout(pad=3.0) # constrained_layout=True is often better
     return fig
-
 
 # --- Streamlit App Layout ---
 
-st.set_page_config(layout="wide")
-st.title("تحليل تسعير مفصل لعيادة الأسنان مع وزن الوقت 📊🦷")
-st.markdown("...") # Keep intro markdown
-
+st.set_page_config(layout="wide", page_title="Dental Pricing Analysis")
+# Initialize state first
 initialize_session_state()
 
-# --- Tabs ---
-tab1, tab2 = st.tabs(["🎛️ إدخال البيانات وحساب التسعير", "📈 التحليلات والرسوم البيانية"])
+# --- Sidebar ---
+with st.sidebar:
+    st.image("https://img.icons8.com/external-flaticons-lineal-color-flat-icons/64/external-dental-clinic-dental-flaticons-lineal-color-flat-icons-3.png", width=64) # Example icon
+    st.title("Clinic Settings")
+    st.header("1. Monthly Fixed Costs (EGP)")
+    st.caption("Costs not directly tied to procedures.")
+    rent = st.number_input("Rent", min_value=0.0, value=15000.0, step=500.0, key="rent_sb")
+    salaries = st.number_input("Staff Salaries", min_value=0.0, value=20000.0, step=500.0, key="salaries_sb")
+    utilities = st.number_input("Utilities (Elec, Water, Net)", min_value=0.0, value=5000.0, step=200.0, key="utilities_sb")
+    insurance = st.number_input("Insurance & Maintenance", min_value=0.0, value=2000.0, step=100.0, key="insurance_sb")
+    marketing = st.number_input("Marketing & Advertising", min_value=0.0, value=1000.0, step=100.0, key="marketing_sb")
+    other_fixed = st.number_input("Other Fixed Costs", min_value=0.0, value=0.0, step=100.0, key="other_fixed_sb")
 
-# --- Tab 1: Data Input and Calculation ---
-with tab1:
-    st.header("1. إدخال التكاليف الثابتة الشهرية")
-    # ... (Fixed cost input fields remain the same) ...
-    col1_fixed, col2_fixed = st.columns(2)
-    with col1_fixed:
-        rent = st.number_input("إيجار العيادة (جنيه)", min_value=0.0, value=15000.0, step=500.0, key="rent")
-        salaries = st.number_input("رواتب العاملين (جنيه)", min_value=0.0, value=20000.0, step=500.0, key="salaries")
-        utilities = st.number_input("فواتير الخدمات (كهرباء، ماء، إنترنت) (جنيه)", min_value=0.0, value=5000.0, step=200.0, key="utilities")
-    with col2_fixed:
-        insurance = st.number_input("تأمين وصيانة ومصاريف إدارية (جنيه)", min_value=0.0, value=2000.0, step=100.0, key="insurance")
-        marketing = st.number_input("تكاليف تسويق وإعلان (جنيه)", min_value=0.0, value=1000.0, step=100.0, key="marketing")
-        other_fixed = st.number_input("تكاليف ثابتة أخرى (جنيه)", min_value=0.0, value=0.0, step=100.0, key="other_fixed")
-
+    # Calculate and display total fixed cost IN THE SIDEBAR
     current_total_fixed_cost = rent + salaries + utilities + insurance + marketing + other_fixed
-    st.metric(label="**إجمالي التكاليف الثابتة الشهرية**", value=f"{current_total_fixed_cost:,.2f} جنيه")
+    st.metric(label="**Total Monthly Fixed Costs**", value=f"{current_total_fixed_cost:,.2f} EGP")
     st.divider()
 
+    st.header("2. Target Profit Margin")
+    st.caption("Desired profit as a percentage over total cost.")
+    # Read default from state, but slider directly controls the current value
+    current_margin_percentage = st.slider(
+        "Profit Margin (%)",
+        min_value=0, max_value=200,
+        value=int(st.session_state.get(STATE_CALCULATED_MARGIN, 0.30) * 100), # Default to last calculated or 30%
+        step=5,
+        key="margin_slider_sb"
+    )
+    current_margin = current_margin_percentage / 100.0
+    st.info(f"Target Margin: {current_margin_percentage}%")
 
-    st.header("2. إدارة بيانات الخدمات")
-    st.caption("عرض وتعديل وإضافة الخدمات المقدمة.")
+# --- Main Content Tabs ---
+tab1, tab2 = st.tabs(["📁 Service Management & Pricing", "📊 Sensitivity Analysis"])
+
+with tab1:
+    st.header("Service Management and Pricing Calculation")
+    st.markdown("""
+    Here you can manage the list of dental services offered. Add new services, edit existing ones, or remove them.
+    The `Duration (hours)` is crucial as it's used to allocate the **Total Fixed Costs** you set in the sidebar.
+    """)
 
     # --- Display Current Services DataFrame ---
-    st.subheader("الخدمات الحالية:")
+    st.subheader("Current Services List")
     if st.session_state[STATE_SERVICES_DF].empty:
-        st.info("لا توجد خدمات مدرجة حالياً. يرجى استخدام نموذج الإضافة أدناه.")
+        st.info("No services added yet. Use the 'Add New Service' form below.")
     else:
-        # Display the DataFrame - make it non-editable here
         st.dataframe(
             st.session_state[STATE_SERVICES_DF],
-            hide_index=True, # Often cleaner without the default index
+            hide_index=True,
             use_container_width=True,
-            column_config={ # Define formatting for display
-                 COL_EXPECTED_CASES: st.column_config.NumberColumn(format="%d"),
-                 COL_VAR_COST: st.column_config.NumberColumn(format="%.2f ج"),
-                 COL_DURATION: st.column_config.NumberColumn(format="%.2f ساعة"),
-            }
+            column_config={ # Define formatting and user-friendly names for display
+                 COL_NAME: st.column_config.TextColumn("Service Name", help="Name of the dental procedure"),
+                 COL_EXPECTED_CASES: st.column_config.NumberColumn("Expected Cases / Month", help="Estimated monthly volume", format="%d", min_value=0),
+                 COL_VAR_COST: st.column_config.NumberColumn("Variable Cost / Case (EGP)", help="Direct material/lab cost per procedure", format="%.2f", min_value=0.0),
+                 COL_DURATION: st.column_config.NumberColumn("Duration (hours)", help="Average chair time in hours (e.g., 1.5)", format="%.2f", min_value=0.1),
+            },
+            key="service_display_df" # Add key for stability if needed
             )
 
-        # --- Add Edit/Delete buttons iterating outside the dataframe ---
-        st.write("--- إجراءات التعديل والحذف ---")
-        services_df = st.session_state[STATE_SERVICES_DF] # Get reference
+        # --- Edit/Delete Actions ---
+        st.markdown("--- **Modify Services** ---")
+        services_df_display = st.session_state[STATE_SERVICES_DF] # Get reference
         indices_to_delete = []
 
-        for index in services_df.index:
-            service_name = services_df.loc[index, COL_NAME]
-            cols = st.columns([4, 1, 1]) # Adjust column ratios as needed
-            cols[0].write(f"**{service_name}** (صف رقم: {index})") # Show index for reference
+        # Create columns for buttons for better layout
+        num_services = len(services_df_display)
+        cols_per_row = 3 # Adjust how many edit/delete combos fit per row
+        col_idx = 0
 
-            # Edit Button
-            edit_key = f"edit_{index}_{service_name}"
-            if cols[1].button("✏️ تعديل", key=edit_key):
-                st.session_state[STATE_EDIT_TARGET_INDEX] = index # Set index to edit
-                st.rerun() # Rerun to show the edit form
+        for index in services_df_display.index:
+            service_name = services_df_display.loc[index, COL_NAME]
 
-            # Delete Button
-            delete_key = f"delete_{index}_{service_name}"
-            if cols[2].button("🗑️ حذف", key=delete_key):
-                indices_to_delete.append(index)
-                # Clear edit target if the row being edited is deleted
-                if st.session_state[STATE_EDIT_TARGET_INDEX] == index:
-                    st.session_state[STATE_EDIT_TARGET_INDEX] = None
+            # Create layout columns dynamically
+            if col_idx % cols_per_row == 0:
+                cols = st.columns(cols_per_row)
+
+            with cols[col_idx % cols_per_row]:
+                 st.markdown(f"**{service_name}**") # Display name clearly
+                 sub_cols = st.columns(2) # Columns for Edit/Delete buttons side-by-side
+
+                 # Edit Button
+                 edit_key = f"edit_{index}_{service_name.replace(' ', '_')}" # Make key safer
+                 if sub_cols[0].button("✏️ Edit", key=edit_key, help=f"Edit details for {service_name}"):
+                     st.session_state[STATE_EDIT_TARGET_INDEX] = index
+                     st.rerun()
+
+                 # Delete Button
+                 delete_key = f"delete_{index}_{service_name.replace(' ', '_')}"
+                 if sub_cols[1].button("🗑️ Delete", key=delete_key, help=f"Remove {service_name}"):
+                     indices_to_delete.append(index)
+                     if st.session_state[STATE_EDIT_TARGET_INDEX] == index:
+                         st.session_state[STATE_EDIT_TARGET_INDEX] = None # Clear edit if deleting target
+
+            col_idx += 1 # Move to the next column position
 
         # Process deletions after the loop
         if indices_to_delete:
-            st.session_state[STATE_SERVICES_DF] = services_df.drop(indices_to_delete).reset_index(drop=True)
-            # If we deleted the row being edited, ensure the edit state is cleared
-            if st.session_state[STATE_EDIT_TARGET_INDEX] in indices_to_delete:
-                 st.session_state[STATE_EDIT_TARGET_INDEX] = None
-            st.rerun() # Rerun to reflect deletions
+            st.session_state[STATE_SERVICES_DF] = services_df_display.drop(indices_to_delete).reset_index(drop=True)
+            st.rerun()
 
-
-    # --- Conditional Edit Form ---
+    # --- Conditional Edit Form (Placed below Add/Edit/Delete buttons) ---
     if st.session_state[STATE_EDIT_TARGET_INDEX] is not None:
         edit_index = st.session_state[STATE_EDIT_TARGET_INDEX]
-        # Check if index still exists after potential deletions
         if edit_index in st.session_state[STATE_SERVICES_DF].index:
-            st.subheader(f"📝 تعديل بيانات الخدمة (صف رقم: {edit_index})")
+            st.divider()
+            st.subheader(f"📝 Editing Service (Row: {edit_index})")
             service_data = st.session_state[STATE_SERVICES_DF].loc[edit_index]
 
             with st.form(f"edit_service_form_{edit_index}"):
-                st.info(f"التعديل على: **{service_data[COL_NAME]}**") # Show which service is being edited
-                # Note: Don't allow editing the name easily here, as it might break lookups if used elsewhere.
-                # If name editing is needed, add careful checks for uniqueness.
+                st.markdown(f"Editing: **{service_data[COL_NAME]}**")
+                # Generally safer not to edit name easily, could break lookups.
+                # If needed, add uniqueness checks.
+                # edited_name = st.text_input("Service Name", value=service_data[COL_NAME], key=f"edit_name_{edit_index}")
 
-                edited_cases = st.number_input("عدد الحالات المتوقعة/شهر", min_value=0, step=1, key=f"edit_cases_{edit_index}", value=int(service_data[COL_EXPECTED_CASES]))
-                edited_var_cost = st.number_input("التكلفة المتغيرة للحالة (جنيه)", min_value=0.0, step=10.0, format="%.2f", key=f"edit_var_cost_{edit_index}", value=float(service_data[COL_VAR_COST]))
-                edited_duration = st.number_input("مدة الخدمة (ساعات)", min_value=0.1, step=0.25, format="%.2f", key=f"edit_duration_{edit_index}", value=float(service_data[COL_DURATION]))
+                cols_edit = st.columns(3)
+                with cols_edit[0]:
+                    edited_cases = st.number_input("Expected Cases / Month", min_value=0, step=1, key=f"edit_cases_{edit_index}", value=int(service_data[COL_EXPECTED_CASES]))
+                with cols_edit[1]:
+                    edited_var_cost = st.number_input("Variable Cost / Case (EGP)", min_value=0.0, step=10.0, format="%.2f", key=f"edit_var_cost_{edit_index}", value=float(service_data[COL_VAR_COST]))
+                with cols_edit[2]:
+                     edited_duration = st.number_input("Duration (hours)", min_value=0.1, step=0.25, format="%.2f", key=f"edit_duration_{edit_index}", value=float(service_data[COL_DURATION]))
 
-                submitted_edit = st.form_submit_button("💾 حفظ التعديلات")
+                # Buttons for Save/Cancel side-by-side
+                col_btn1, col_btn2, _ = st.columns([1,1,4]) # Adjust ratios
+                submitted_edit = col_btn1.form_submit_button("💾 Save Changes", type="primary")
+                submitted_cancel = col_btn2.form_submit_button("❌ Cancel Edit")
+
                 if submitted_edit:
                      if edited_duration <= 0:
-                          st.warning("يرجى إدخال مدة خدمة أكبر من صفر.")
+                          st.warning("Duration must be greater than zero.")
                      else:
-                        # Update the DataFrame in session state
+                        # Update the DataFrame
                         st.session_state[STATE_SERVICES_DF].loc[edit_index, COL_EXPECTED_CASES] = edited_cases
                         st.session_state[STATE_SERVICES_DF].loc[edit_index, COL_VAR_COST] = edited_var_cost
                         st.session_state[STATE_SERVICES_DF].loc[edit_index, COL_DURATION] = edited_duration
+                        # Name update if enabled:
+                        # st.session_state[STATE_SERVICES_DF].loc[edit_index, COL_NAME] = edited_name
 
                         st.session_state[STATE_EDIT_TARGET_INDEX] = None # Clear edit state
-                        st.success("تم حفظ التعديلات.")
-                        st.rerun() # Rerun to show updated table and hide form
+                        st.success(f"Service '{service_data[COL_NAME]}' updated.")
+                        st.rerun()
+                if submitted_cancel:
+                     st.session_state[STATE_EDIT_TARGET_INDEX] = None
+                     st.rerun()
         else:
-            # Index doesn't exist anymore (e.g., deleted), clear the edit state
+            # Index no longer valid, clear state and inform user
              st.session_state[STATE_EDIT_TARGET_INDEX] = None
-             st.warning("الخدمة التي كنت تحاول تعديلها لم تعد موجودة.")
+             st.warning("The service you were editing seems to have been removed.")
              st.rerun()
 
 
-    # --- Add New Service Form ---
-    # Place it clearly separated, maybe within an expander
-    with st.expander("➕ إضافة خدمة جديدة", expanded=(st.session_state[STATE_EDIT_TARGET_INDEX] is None)): # Keep open if not editing
+    # --- Add New Service Form (in an expander) ---
+    st.divider()
+    with st.expander("➕ Add New Service", expanded=(st.session_state[STATE_EDIT_TARGET_INDEX] is None and st.session_state[STATE_SERVICES_DF].empty)):
         with st.form("add_service_form", clear_on_submit=True):
-            new_name = st.text_input("اسم الخدمة الجديدة")
-            col1_add, col2_add, col3_add = st.columns(3)
-            with col1_add:
-                new_expected_cases = st.number_input("عدد الحالات المتوقعة/شهر", min_value=0, step=1, key="add_cases")
-            with col2_add:
-                new_variable_cost = st.number_input("التكلفة المتغيرة للحالة (جنيه)", min_value=0.0, step=10.0, format="%.2f", key="add_var_cost")
-            with col3_add:
-                new_duration = st.number_input("مدة الخدمة (ساعات)", min_value=0.1, step=0.25, format="%.2f", key="add_duration", help="متوسط وقت الكرسي الفعلي")
+            new_name = st.text_input("New Service Name*")
+            cols_add = st.columns(3)
+            with cols_add[0]:
+                new_expected_cases = st.number_input("Expected Cases / Month*", min_value=0, step=1, key="add_cases")
+            with cols_add[1]:
+                new_variable_cost = st.number_input("Variable Cost / Case (EGP)*", min_value=0.0, step=10.0, format="%.2f", key="add_var_cost")
+            with cols_add[2]:
+                new_duration = st.number_input("Duration (hours)*", min_value=0.1, step=0.25, format="%.2f", key="add_duration", help="Average chair time in hours")
 
-            submitted_add = st.form_submit_button("➕ إضافة الخدمة")
+            submitted_add = st.form_submit_button("✨ Add Service to List")
             if submitted_add:
                 if not new_name:
-                    st.warning("يرجى إدخال اسم للخدمة الجديدة.")
+                    st.warning("Please enter a name for the new service.")
                 elif new_duration <= 0:
-                    st.warning("يرجى إدخال مدة خدمة أكبر من صفر.")
-                # Check for duplicate service names
+                    st.warning("Duration must be greater than zero.")
                 elif new_name in st.session_state[STATE_SERVICES_DF][COL_NAME].tolist():
-                    st.warning(f"الخدمة باسم '{new_name}' موجودة بالفعل. يرجى اختيار اسم فريد.")
+                    st.warning(f"A service named '{new_name}' already exists. Please choose a unique name.")
                 else:
                     new_service_data = pd.DataFrame([{
                         COL_NAME: new_name,
@@ -333,130 +339,168 @@ with tab1:
                         COL_VAR_COST: new_variable_cost,
                         COL_DURATION: new_duration
                     }])
-                    # Use pd.concat to append the new row
                     st.session_state[STATE_SERVICES_DF] = pd.concat(
                         [st.session_state[STATE_SERVICES_DF], new_service_data],
-                        ignore_index=True # Reset index after adding
+                        ignore_index=True
                     )
-                    st.success(f"تمت إضافة خدمة '{new_name}'.")
-                    st.rerun() # Rerun to update the main dataframe display
+                    # Ensure types are correct after adding
+                    st.session_state[STATE_SERVICES_DF][COL_EXPECTED_CASES] = st.session_state[STATE_SERVICES_DF][COL_EXPECTED_CASES].astype(int)
+                    st.session_state[STATE_SERVICES_DF][COL_VAR_COST] = st.session_state[STATE_SERVICES_DF][COL_VAR_COST].astype(float)
+                    st.session_state[STATE_SERVICES_DF][COL_DURATION] = st.session_state[STATE_SERVICES_DF][COL_DURATION].astype(float)
+
+                    st.success(f"Service '{new_name}' added.")
+                    st.rerun()
 
     st.divider()
 
-    st.header("3. تحديد هامش الربح المستهدف")
-    # ... (Margin slider remains the same) ...
-    current_margin_percentage = st.slider(
-        "هامش الربح المطلوب فوق التكلفة الإجمالية (%)",
-        min_value=0, max_value=200, value=int(st.session_state[STATE_MARGIN] * 100), step=5,
-        key="margin_slider"
-    )
-    current_margin = current_margin_percentage / 100.0
-    st.info(f"...") # Keep info text
-
     # --- Calculation Trigger ---
-    if st.button("✅ حساب التسعير التفصيلي وتحديث التحليلات", type="primary"):
-        # Read the potentially modified DataFrame from session state
+    st.header("Pricing Calculation")
+    st.markdown("Click the button below to calculate the detailed pricing based on the current services, fixed costs, and target margin set in the sidebar.")
+    if st.button("💰 Calculate Pricing & Update Analysis", type="primary", use_container_width=True):
         current_services_df = st.session_state[STATE_SERVICES_DF]
+        # Read fixed cost and margin directly from sidebar widgets for calculation
+        fixed_cost_for_calc = current_total_fixed_cost
+        margin_for_calc = current_margin
 
         if not current_services_df.empty:
             results = calculate_detailed_pricing(
-                current_services_df, # Pass the DataFrame directly
-                current_total_fixed_cost,
-                current_margin
+                current_services_df,
+                fixed_cost_for_calc,
+                margin_for_calc
             )
             if results is not None:
+                # Store results and the parameters used for calculation in state
                 st.session_state[STATE_RESULTS_DF] = results
-                st.session_state[STATE_TOTAL_FIXED_COST] = current_total_fixed_cost
-                st.session_state[STATE_MARGIN] = current_margin
+                st.session_state[STATE_CALCULATED_FIXED_COST] = fixed_cost_for_calc
+                st.session_state[STATE_CALCULATED_MARGIN] = margin_for_calc
                 st.session_state[STATE_CALCULATED] = True
-                st.success("تم حساب التسعير بنجاح! يمكنك الآن عرض النتائج أدناه وفي تبويب التحليلات.")
+                st.success("Pricing calculated successfully!")
+                # st.balloons() # Optional fun feedback
             else:
-                 st.session_state[STATE_CALCULATED] = False
+                 st.session_state[STATE_CALCULATED] = False # Indicate calculation failed
+                 st.error("Calculation failed. Please check service data and fixed costs.")
         else:
-            st.warning("لا يمكن إجراء الحسابات. يرجى إضافة بيانات خدمة واحدة على الأقل.")
+            st.warning("Cannot calculate pricing. Please add at least one service.")
             st.session_state[STATE_CALCULATED] = False
 
 
     # --- Display Results Table (if calculated) ---
     if st.session_state[STATE_CALCULATED] and st.session_state[STATE_RESULTS_DF] is not None:
-        st.subheader("📋 نتائج التحليل التفصيلي لكل خدمة")
-        # ... (Display logic for results_df remains the same) ...
-        display_df = st.session_state[STATE_RESULTS_DF]
-        display_df_final = display_df[[
+        st.divider()
+        st.subheader("📋 Detailed Pricing Results")
+        results_df_display = st.session_state[STATE_RESULTS_DF]
+
+        # Prepare display dataframe
+        display_df_final = results_df_display[[
             COL_NAME, COL_EXPECTED_CASES, COL_VAR_COST, COL_DURATION,
             COL_FIXED_COST_PER_CASE, COL_TOTAL_COST_PER_CASE, COL_PRICE_PER_CASE,
             COL_CONTRIB_MARGIN, COL_BREAK_EVEN
-        ]].rename(columns={ # Renaming columns for Arabic display
-            COL_NAME: "اسم الخدمة", COL_EXPECTED_CASES: "الحالات المتوقعة",
-            COL_VAR_COST: "التكلفة المتغيرة/حالة", COL_DURATION: "مدة (ساعة)",
-            COL_FIXED_COST_PER_CASE: "تكلفة ثابتة/حالة", COL_TOTAL_COST_PER_CASE: "تكلفة إجمالية/حالة",
-            COL_PRICE_PER_CASE: "السعر المقترح/حالة", COL_CONTRIB_MARGIN: "هامش المساهمة/حالة",
-            COL_BREAK_EVEN: "نقطة التعادل (عدد حالات)"
+        ]].rename(columns={ # Rename for better readability in the table
+            COL_NAME: "Service Name", COL_EXPECTED_CASES: "Expected Cases",
+            COL_VAR_COST: "Variable Cost/Case", COL_DURATION: "Duration (hr)",
+            COL_FIXED_COST_PER_CASE: "Alloc. Fixed Cost/Case", COL_TOTAL_COST_PER_CASE: "Total Cost/Case",
+            COL_PRICE_PER_CASE: "Suggested Price/Case", COL_CONTRIB_MARGIN: "Contribution Margin/Case",
+            COL_BREAK_EVEN: "Break-Even (Cases)"
         })
 
         st.dataframe(display_df_final.style.format({
-            "التكلفة المتغيرة/حالة": "{:,.2f} ج", "مدة (ساعة)": "{:.2f}",
-            "تكلفة ثابتة/حالة": "{:,.2f} ج", "تكلفة إجمالية/حالة": "{:,.2f} ج",
-            "السعر المقترح/حالة": "{:,.2f} ج", "هامش المساهمة/حالة": "{:,.2f} ج",
-            "نقطة التعادل (عدد حالات)": "{:.1f}"
+            "Variable Cost/Case": "{:,.2f} EGP",
+            "Duration (hr)": "{:.2f}",
+            "Alloc. Fixed Cost/Case": "{:,.2f} EGP",
+            "Total Cost/Case": "{:,.2f} EGP",
+            "Suggested Price/Case": "{:,.2f} EGP",
+            "Contribution Margin/Case": "{:,.2f} EGP",
+            "Break-Even (Cases)": "{:.1f}"
         }), use_container_width=True)
 
-        # --- Totals Summary ---
-        total_expected_revenue = (display_df[COL_PRICE_PER_CASE] * display_df[COL_EXPECTED_CASES]).sum()
-        total_expected_variable_cost = (display_df[COL_VAR_COST] * display_df[COL_EXPECTED_CASES]).sum()
-        total_expected_profit = total_expected_revenue - total_expected_variable_cost - st.session_state[STATE_TOTAL_FIXED_COST]
-        st.subheader("📊 ملخص التوقعات الإجمالية")
-        col_rev, col_cost, col_profit = st.columns(3)
-        col_rev.metric("إجمالي الإيرادات المتوقعة", f"{total_expected_revenue:,.2f} ج")
-        col_cost.metric("إجمالي التكاليف المتوقعة", f"{(total_expected_variable_cost + st.session_state[STATE_TOTAL_FIXED_COST]):,.2f} ج")
-        col_profit.metric("إجمالي الربح المتوقع", f"{total_expected_profit:,.2f} ج", delta_color="normal")
+        # --- Overall Summary Metrics ---
+        st.subheader("📈 Overall Monthly Projections")
+        total_expected_revenue = (results_df_display[COL_PRICE_PER_CASE] * results_df_display[COL_EXPECTED_CASES]).sum()
+        total_expected_variable_cost = (results_df_display[COL_VAR_COST] * results_df_display[COL_EXPECTED_CASES]).sum()
+        # Use fixed cost that was actually used in calculation
+        total_fixed_cost_used = st.session_state[STATE_CALCULATED_FIXED_COST]
+        total_expected_profit = total_expected_revenue - total_expected_variable_cost - total_fixed_cost_used
 
+        summary_cols = st.columns(3)
+        summary_cols[0].metric("Projected Revenue", f"{total_expected_revenue:,.2f} EGP")
+        summary_cols[1].metric("Projected Total Costs", f"{(total_expected_variable_cost + total_fixed_cost_used):,.2f} EGP")
+        summary_cols[2].metric("Projected Profit", f"{total_expected_profit:,.2f} EGP")
+
+    # Show message if calculation hasn't run yet
     elif not st.session_state[STATE_CALCULATED]:
-        st.info("يرجى إدخال/تعديل بيانات الخدمات والتكاليف الثابتة، ثم الضغط على زر 'حساب التسعير' لعرض النتائج.")
+         st.info("Please manage your services and click 'Calculate Pricing' to see the results here.")
 
 
-# --- Tab 2: Analysis and Plots ---
+# --- Tab 2: Sensitivity Analysis ---
 with tab2:
-    st.header("📈 تحليل الحساسية للخدمات (Sensitivity Analysis)")
-    # ... (Analysis tab logic remains exactly the same, using results from session state) ...
+    st.header("Sensitivity Analysis")
+    st.markdown("""
+    Analyze how the **Suggested Price** and **Break-Even Point** for a specific service change
+    if the actual number of cases differs from your initial expectation.
+    This uses the fixed cost allocation and margin calculated in the previous step.
+    """)
+
     if not st.session_state[STATE_CALCULATED] or st.session_state[STATE_RESULTS_DF] is None:
-        st.warning("يرجى الضغط على زر 'حساب التسعير' في التبويب الأول لعرض التحليلات.")
+        st.warning("Please run the pricing calculation on the 'Service Management & Pricing' tab first.")
     else:
-        results_df = st.session_state[STATE_RESULTS_DF]
-        if results_df.empty or COL_NAME not in results_df.columns:
-             st.warning("لا توجد نتائج تحليل متاحة أو أن النتائج غير مكتملة.")
+        results_df_analysis = st.session_state[STATE_RESULTS_DF]
+        if results_df_analysis.empty or COL_NAME not in results_df_analysis.columns:
+             st.warning("No valid calculation results found for analysis.")
         else:
-            service_names = results_df[COL_NAME].tolist()
-            if not service_names:
-                st.warning("لا توجد خدمات متاحة للتحليل في النتائج المحسوبة.")
+            # Use English name if available, otherwise default name
+            service_names_options = results_df_analysis[COL_NAME].tolist() # Assuming names are suitable for display
+
+            if not service_names_options:
+                st.warning("No services available in the calculated results.")
             else:
                 selected_service_name = st.selectbox(
-                    "اختر الخدمة لتحليل حساسيتها لتغير عدد الحالات:",
-                    options=service_names, index=0, key="service_select"
+                    "Select Service for Analysis:",
+                    options=service_names_options,
+                    index=0,
+                    key="service_select_analysis"
                 )
 
-                if selected_service_name and selected_service_name in results_df[COL_NAME].values:
-                    service_data = results_df[results_df[COL_NAME] == selected_service_name].iloc[0]
-                    st.markdown(f"#### تحليل حساسية الخدمة: **{selected_service_name}**")
-                    st.caption(f"""...""") # Keep caption
+                if selected_service_name and selected_service_name in results_df_analysis[COL_NAME].values:
+                    service_data = results_df_analysis[results_df_analysis[COL_NAME] == selected_service_name].iloc[0]
 
-                    col_sens1, col_sens2, col_sens3 = st.columns(3)
-                    with col_sens1:
-                        min_cases = st.number_input("أقل عدد للحالات في التحليل (Min Cases)", ...)
-                    with col_sens2:
-                        max_cases = st.number_input("أعلى عدد للحالات في التحليل (Max Cases)", ...)
-                    with col_sens3:
-                        step_cases = st.number_input("الخطوة (Step)", ...)
+                    st.markdown(f"#### Analysis for: **{selected_service_name}**")
+                    expected_cases_display = int(service_data[COL_EXPECTED_CASES])
+                    allocated_fc_display = service_data[COL_ALLOC_FIXED_COST]
+                    st.caption(f"Based on initial expectation of **{expected_cases_display} cases/month** and allocated fixed costs of **{allocated_fc_display:,.2f} EGP**.")
+
+
+                    st.markdown("##### Define Analysis Range:")
+                    sens_cols = st.columns(3)
+                    with sens_cols[0]:
+                        min_cases = st.number_input("Min Cases", min_value=1, value=max(1, int(expected_cases_display * 0.2)), step=1, key="min_cases_sens")
+                    with sens_cols[1]:
+                        max_cases = st.number_input("Max Cases", min_value=int(min_cases)+1, value=int(expected_cases_display * 2.0), step=5, key="max_cases_sens")
+                    with sens_cols[2]:
+                        step_cases = st.number_input("Step", min_value=1, value=max(1, int((max_cases - min_cases)/10) if (max_cases - min_cases)>0 else 1), step=1, key="step_cases_sens")
 
                     if max_cases <= min_cases:
-                        st.error("...")
+                        st.error("Max Cases must be greater than Min Cases.")
                     else:
                         cases_range_list = list(range(int(min_cases), int(max_cases) + 1, int(step_cases)))
                         if not cases_range_list:
-                             st.warning("...")
+                             st.warning("The specified range and step result in no cases to analyze.")
                         else:
-                            prices, break_evens = calculate_sensitivity(...)
+                            # Perform sensitivity analysis using the stored calculated margin
+                            margin_used = st.session_state[STATE_CALCULATED_MARGIN]
+                            prices, break_evens = calculate_sensitivity(
+                                variable_cost=service_data[COL_VAR_COST],
+                                allocated_fixed_cost=service_data[COL_ALLOC_FIXED_COST], # Key: use the allocated cost
+                                margin=margin_used,
+                                cases_range=cases_range_list
+                            )
+
+                            # Generate and display plots
+                            st.markdown("##### Analysis Results:")
                             sensitivity_fig = plot_sensitivity(cases_range_list, prices, break_evens)
                             st.pyplot(sensitivity_fig)
+
+                            # Optional: Display data table for sensitivity
+                            # sens_data = pd.DataFrame({ ... })
+                            # st.dataframe(sens_data...)
                 else:
-                    st.error(f"...")
+                    st.error(f"Selected service '{selected_service_name}' not found in the current results. Please recalculate.")
