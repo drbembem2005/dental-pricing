@@ -923,7 +923,8 @@ with tab1:
             }).set_tooltips(
                 pd.DataFrame([results_tooltips]), # Pass tooltips as a DataFrame matching columns
                 props='visibility: hidden; position: absolute; background-color: #fafa9 SQA; border: 1px solid #ccc; padding: 5px; z-index: 1; text-align: left;'
-            ).background_gradient(cmap='Greens', subset=[COL_CONTRIB_MARGIN_RATIO, COL_CM_PER_HOUR]), # Highlight profitability
+            # --- !!! CORRECTION IS HERE !!! ---
+            ).background_gradient(cmap='Greens', subset=[COL_CONTRIB_MARGIN_RATIO]), # Apply gradient only to CM Ratio
          hide_index=True, use_container_width=True)
 
         # --- Download Button ---
