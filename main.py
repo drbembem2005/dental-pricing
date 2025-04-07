@@ -546,8 +546,9 @@ def calculate_detailed_pricing(services_df_input: pd.DataFrame, total_fixed_cost
 
     return calc_df
 
+# ---!!! CORRECTED PLOT FUNCTION !!!---
 def plot_bar_chart(df: pd.DataFrame, x_col: str, y_col: str, title_key: str, ylabel_key: str, tooltip_key: str, sort_by_y=True, color='skyblue'):
-    """Helper to create a formatted bar chart with language support."""
+    """Helper to create a formatted bar chart using Pandas plotting integration."""
     if df is None or df.empty or x_col not in df.columns or y_col not in df.columns:
         st.caption(get_text('plot_nodata'))
         return None
@@ -564,24 +565,43 @@ def plot_bar_chart(df: pd.DataFrame, x_col: str, y_col: str, title_key: str, yla
     if sort_by_y:
         plot_df = plot_df.sort_values(by=y_col, ascending=False)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    bars = ax.bar(plot_df[x_col], plot_df[y_col], color=color)
+    # --- Changes Start Here ---
+    fig, ax = plt.subplots(figsize=(10, 7)) # Slightly taller figure for rotated labels + tooltip
+
+    # Use Pandas plotting method directly on the axes
+    plot_df.plot(kind='bar', x=x_col, y=y_col, ax=ax, color=color, legend=False) # Plot onto ax
+
+    # Set title and labels (no change)
     ax.set_title(get_text(title_key), fontsize=14, fontweight='bold')
-    ax.set_xlabel(get_text('plot_service'), fontsize=12) # X-axis is always service
+    ax.set_xlabel(get_text('plot_service'), fontsize=12)
     ax.set_ylabel(get_text(ylabel_key), fontsize=12)
+
+    # Apply tick parameters AFTER Pandas plotting (usually works better)
     ax.tick_params(axis='x', rotation=45, labelsize=10, ha='right')
     ax.tick_params(axis='y', labelsize=10)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: format(int(x), ','))) # Format Y-axis ticks
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: format(int(x), ',')))
     ax.grid(axis='y', linestyle='--', alpha=0.7)
-    ax.bar_label(bars, fmt='{:,.0f}', fontsize=9, padding=3) # Format bar labels
 
-    # Add tooltip below chart (use figtext for positioning relative to figure)
+    # Add bar labels using the container created by Pandas plot
+    if ax.containers:
+        try: # Add try-except for robustness, although it should find containers
+            ax.bar_label(ax.containers[0], fmt='{:,.0f}', fontsize=9, padding=3)
+        except IndexError:
+             st.warning("Could not add bar labels to plot.")
+
+
+    # Add tooltip (adjust vertical position if needed)
     tooltip_text = get_text(tooltip_key)
-    fig.text(0.5, -0.1, tooltip_text, ha='center', va='bottom', fontsize=9, style='italic', wrap=True,
+    # Adjust fig.text y-position (e.g., -0.15 or -0.2) if it overlaps with long rotated labels
+    fig.text(0.5, -0.15, tooltip_text, ha='center', va='bottom', fontsize=9, style='italic', wrap=True,
              bbox=dict(boxstyle='round,pad=0.3', fc='lightyellow', alpha=0.6))
 
-    fig.tight_layout(rect=[0, 0.05, 1, 0.95]) # Adjust layout space for x-labels and tooltip
+    # Use tight_layout, possibly adjusting rect if tooltip/labels overlap
+    fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    # --- Changes End Here ---
+
     return fig
+# ---!!! END OF CORRECTED PLOT FUNCTION !!!---
 
 # Sensitivity calculation remains the same logic
 def calculate_sensitivity(variable_cost: float, allocated_fixed_cost: float, margin: float, cases_range: List[int]) -> Tuple[List[float], List[float]]:
@@ -923,7 +943,6 @@ with tab1:
             }).set_tooltips(
                 pd.DataFrame([results_tooltips]), # Pass tooltips as a DataFrame matching columns
                 props='visibility: hidden; position: absolute; background-color: #fafa9 SQA; border: 1px solid #ccc; padding: 5px; z-index: 1; text-align: left;'
-            # --- !!! CORRECTION IS HERE !!! ---
             ).background_gradient(cmap='Greens', subset=[COL_CONTRIB_MARGIN_RATIO]), # Apply gradient only to CM Ratio
          hide_index=True, use_container_width=True)
 
@@ -951,8 +970,8 @@ with tab2:
         # Retrieve base results and parameters from state
         base_results_df = st.session_state[STATE_RESULTS_DF]
         # Important: Use the settings/inputs that *generated* the base results
-        base_fixed_cost = sum(v for k, v in st.session_state[STATE_SETTINGS].items() if k not in ['base_margin'])
-        base_margin = st.session_state[STATE_SETTINGS]['base_margin']
+        base_fixed_cost = sum(float(v) for k, v in st.session_state[STATE_SETTINGS].items() if k not in ['base_margin']) # Ensure float sum
+        base_margin = float(st.session_state[STATE_SETTINGS]['base_margin']) # Ensure float
         # The input DF used for the calculation is the one currently in state
         base_services_df_input = st.session_state[STATE_SERVICES_DF_INPUT]
 
@@ -1000,7 +1019,12 @@ with tab2:
                 sim_margin = sim_margin_pct / 100.0
 
                 st.markdown(get_text('sim_specific_adjust'))
-                service_options = [get_text('sim_option_none')] + base_results_df[COL_NAME_EN].tolist()
+                # Ensure base_results_df exists and is not empty before creating options
+                if base_results_df is not None and not base_results_df.empty:
+                     service_options = [get_text('sim_option_none')] + base_results_df[COL_NAME_EN].tolist()
+                else:
+                     service_options = [get_text('sim_option_none')]
+
                 selected_service_sim = st.selectbox(get_text('sim_select_service'), options=service_options, key="sim_service_select_in_form", index=0)
 
                 sim_var_cost_override = None
@@ -1010,44 +1034,54 @@ with tab2:
 
                 if selected_service_sim != get_text('sim_option_none'):
                     # Find row in the *input* DataFrame corresponding to selection
-                    service_input_row = base_services_df_input[base_services_df_input[COL_NAME_EN] == selected_service_sim]
-                    if not service_input_row.empty:
-                        modified_service_idx = service_input_row.index[0]
-                        sim_spec_cols = st.columns(3)
-                        # Use values from the INPUT dataframe as defaults for simulation overrides
-                        sim_var_cost_override = sim_spec_cols[0].number_input(get_text('sim_var_cost_label'), value=float(service_input_row[COL_VAR_COST].iloc[0]), format="%.2f", key="sim_vc", min_value=0.0)
-                        sim_cases_override = sim_spec_cols[1].number_input(get_text('sim_cases_label'), value=int(service_input_row[COL_EXPECTED_CASES].iloc[0]), key="sim_ec", min_value=0, step=1)
-                        sim_duration_override = sim_spec_cols[2].number_input(get_text('sim_duration_label'), value=float(service_input_row[COL_DURATION].iloc[0]), format="%.2f", key="sim_dur", min_value=0.01, step=0.1)
+                    # Ensure base_services_df_input is a DataFrame and not empty
+                    if base_services_df_input is not None and not base_services_df_input.empty:
+                         service_input_row = base_services_df_input[base_services_df_input[COL_NAME_EN] == selected_service_sim]
+                         if not service_input_row.empty:
+                            modified_service_idx = service_input_row.index[0]
+                            sim_spec_cols = st.columns(3)
+                            # Use values from the INPUT dataframe as defaults for simulation overrides
+                            sim_var_cost_override = sim_spec_cols[0].number_input(get_text('sim_var_cost_label'), value=float(service_input_row[COL_VAR_COST].iloc[0]), format="%.2f", key="sim_vc", min_value=0.0)
+                            sim_cases_override = sim_spec_cols[1].number_input(get_text('sim_cases_label'), value=int(service_input_row[COL_EXPECTED_CASES].iloc[0]), key="sim_ec", min_value=0, step=1)
+                            sim_duration_override = sim_spec_cols[2].number_input(get_text('sim_duration_label'), value=float(service_input_row[COL_DURATION].iloc[0]), format="%.2f", key="sim_dur", min_value=0.01, step=0.1)
+                         else:
+                            st.warning(get_text('sim_service_not_found'))
                     else:
-                        st.warning(get_text('sim_service_not_found'))
+                         st.warning("Base service input data not available for simulation overrides.")
+
 
                 submitted_sim = st.form_submit_button(get_text('sim_run_button'), type="primary")
 
             # --- Simulation Results Display ---
             if submitted_sim:
                 # Prepare input DF copy for simulation
-                sim_services_df = base_services_df_input.copy()
-                if modified_service_idx is not None and selected_service_sim != get_text('sim_option_none'):
-                    # Apply overrides safely using .loc
-                    if sim_var_cost_override is not None: sim_services_df.loc[modified_service_idx, COL_VAR_COST] = sim_var_cost_override
-                    if sim_cases_override is not None: sim_services_df.loc[modified_service_idx, COL_EXPECTED_CASES] = sim_cases_override
-                    if sim_duration_override is not None: sim_services_df.loc[modified_service_idx, COL_DURATION] = sim_duration_override
+                # Ensure base_services_df_input exists
+                if base_services_df_input is not None:
+                    sim_services_df = base_services_df_input.copy()
+                    if modified_service_idx is not None and selected_service_sim != get_text('sim_option_none'):
+                        # Apply overrides safely using .loc
+                        if sim_var_cost_override is not None: sim_services_df.loc[modified_service_idx, COL_VAR_COST] = sim_var_cost_override
+                        if sim_cases_override is not None: sim_services_df.loc[modified_service_idx, COL_EXPECTED_CASES] = sim_cases_override
+                        if sim_duration_override is not None: sim_services_df.loc[modified_service_idx, COL_DURATION] = sim_duration_override
 
-                # Validate the simulated input data
-                sim_is_valid, sim_errors = validate_service_data(sim_services_df)
-                if not sim_is_valid:
-                    st.error(get_text('sim_input_invalid'))
-                    for err in sim_errors: st.markdown(f"- {err}")
-                    st.session_state[STATE_SIMULATION_RESULTS_DF] = None # Clear previous results
-                else:
-                    # Run calculation with simulated inputs
-                    simulated_results = calculate_detailed_pricing(sim_services_df, sim_fixed_cost, sim_margin)
-                    if simulated_results is not None:
-                        st.session_state[STATE_SIMULATION_RESULTS_DF] = simulated_results
-                        st.success(get_text('sim_success'))
+                    # Validate the simulated input data
+                    sim_is_valid, sim_errors = validate_service_data(sim_services_df)
+                    if not sim_is_valid:
+                        st.error(get_text('sim_input_invalid'))
+                        for err in sim_errors: st.markdown(f"- {err}")
+                        st.session_state[STATE_SIMULATION_RESULTS_DF] = None # Clear previous results
                     else:
-                        st.error(get_text('sim_fail'))
-                        st.session_state[STATE_SIMULATION_RESULTS_DF] = None
+                        # Run calculation with simulated inputs
+                        simulated_results = calculate_detailed_pricing(sim_services_df, sim_fixed_cost, sim_margin)
+                        if simulated_results is not None:
+                            st.session_state[STATE_SIMULATION_RESULTS_DF] = simulated_results
+                            st.success(get_text('sim_success'))
+                        else:
+                            st.error(get_text('sim_fail'))
+                            st.session_state[STATE_SIMULATION_RESULTS_DF] = None
+                else:
+                     st.error("Cannot run simulation - base input data is missing.")
+
 
             # Display simulation results if they exist in state
             if st.session_state[STATE_SIMULATION_RESULTS_DF] is not None:
@@ -1056,49 +1090,51 @@ with tab2:
                  st.subheader(get_text('sim_results_header'))
 
                  # Calculate Base KPIs again for comparison (using base_results_df)
-                 base_total_revenue = base_results_df[COL_REVENUE_EXPECTED].sum()
-                 base_total_profit = base_results_df[COL_PROFIT_EXPECTED].sum()
-                 base_overall_margin_pct = (base_total_profit / base_total_revenue * 100) if base_total_revenue else 0
-                 base_total_hours = base_results_df[COL_SERVICE_HOURS].sum()
-                 base_avg_revenue_per_hour = base_total_revenue / base_total_hours if base_total_hours else 0
+                 # Ensure base_results_df exists
+                 if base_results_df is not None:
+                     base_total_revenue = base_results_df[COL_REVENUE_EXPECTED].sum()
+                     base_total_profit = base_results_df[COL_PROFIT_EXPECTED].sum()
+                     base_overall_margin_pct = (base_total_profit / base_total_revenue * 100) if base_total_revenue else 0
+                     base_total_hours = base_results_df[COL_SERVICE_HOURS].sum()
+                     base_avg_revenue_per_hour = base_total_revenue / base_total_hours if base_total_hours else 0
 
-                 # Calculate Simulated KPIs
-                 sim_total_revenue = sim_results_df[COL_REVENUE_EXPECTED].sum()
-                 sim_total_profit = sim_results_df[COL_PROFIT_EXPECTED].sum()
-                 sim_overall_margin_pct = (sim_total_profit / sim_total_revenue * 100) if sim_total_revenue else 0
-                 sim_total_hours = sim_results_df[COL_SERVICE_HOURS].sum()
-                 sim_avg_revenue_per_hour = sim_total_revenue / sim_total_hours if sim_total_hours else 0
+                     # Calculate Simulated KPIs
+                     sim_total_revenue = sim_results_df[COL_REVENUE_EXPECTED].sum()
+                     sim_total_profit = sim_results_df[COL_PROFIT_EXPECTED].sum()
+                     sim_overall_margin_pct = (sim_total_profit / sim_total_revenue * 100) if sim_total_revenue else 0
+                     sim_total_hours = sim_results_df[COL_SERVICE_HOURS].sum()
+                     sim_avg_revenue_per_hour = sim_total_revenue / sim_total_hours if sim_total_hours else 0
 
-                 st.markdown(get_text('sim_kpi_compare'))
-                 sim_kp_cols = st.columns(4)
-                 sim_kp_cols[0].metric(get_text('sim_kpi_revenue'), egp_format(sim_total_revenue), f"{sim_total_revenue-base_total_revenue:,.0f}")
-                 sim_kp_cols[1].metric(get_text('sim_kpi_profit'), egp_format(sim_total_profit), f"{sim_total_profit-base_total_profit:,.0f}")
-                 sim_kp_cols[2].metric(get_text('sim_kpi_margin'), f"{sim_overall_margin_pct:.1f}%", f"{sim_overall_margin_pct-base_overall_margin_pct:.1f}% pts")
-                 sim_kp_cols[3].metric(get_text('sim_kpi_rev_hr'), egp_format(sim_avg_revenue_per_hour), f"{sim_avg_revenue_per_hour-base_avg_revenue_per_hour:,.0f}")
+                     st.markdown(get_text('sim_kpi_compare'))
+                     sim_kp_cols = st.columns(4)
+                     sim_kp_cols[0].metric(get_text('sim_kpi_revenue'), egp_format(sim_total_revenue), f"{sim_total_revenue-base_total_revenue:,.0f}")
+                     sim_kp_cols[1].metric(get_text('sim_kpi_profit'), egp_format(sim_total_profit), f"{sim_total_profit-base_total_profit:,.0f}")
+                     sim_kp_cols[2].metric(get_text('sim_kpi_margin'), f"{sim_overall_margin_pct:.1f}%", f"{sim_overall_margin_pct-base_overall_margin_pct:.1f}% pts")
+                     sim_kp_cols[3].metric(get_text('sim_kpi_rev_hr'), egp_format(sim_avg_revenue_per_hour), f"{sim_avg_revenue_per_hour-base_avg_revenue_per_hour:,.0f}")
 
-                 # Detail Comparison for modified service
-                 if selected_service_sim != get_text('sim_option_none') and modified_service_idx is not None:
-                     # Check if service name exists in both dataframes
-                     base_row = base_results_df[base_results_df[COL_NAME_EN] == selected_service_sim]
-                     sim_row = sim_results_df[sim_results_df[COL_NAME_EN] == selected_service_sim]
+                     # Detail Comparison for modified service
+                     if selected_service_sim != get_text('sim_option_none') and modified_service_idx is not None:
+                         # Check if service name exists in both dataframes
+                         base_row = base_results_df[base_results_df[COL_NAME_EN] == selected_service_sim]
+                         sim_row = sim_results_df[sim_results_df[COL_NAME_EN] == selected_service_sim]
 
-                     if not base_row.empty and not sim_row.empty:
-                         st.markdown(f"--- \n {get_text('sim_detail_compare').format(selected_service_sim)}")
-                         sim_comp_cols = st.columns(4)
-                         base_service_res = base_row.iloc[0]
-                         sim_service_res = sim_row.iloc[0]
+                         if not base_row.empty and not sim_row.empty:
+                             st.markdown(f"--- \n {get_text('sim_detail_compare').format(selected_service_sim)}")
+                             sim_comp_cols = st.columns(4)
+                             base_service_res = base_row.iloc[0]
+                             sim_service_res = sim_row.iloc[0]
 
-                         # Compare Price, CM, BEP, Profit
-                         sim_comp_cols[0].metric(get_text('sim_detail_price'), egp_format(sim_service_res[COL_PRICE_PER_CASE]), f"{sim_service_res[COL_PRICE_PER_CASE]-base_service_res[COL_PRICE_PER_CASE]:,.0f}")
-                         sim_comp_cols[1].metric(get_text('sim_detail_cm'), egp_format(sim_service_res[COL_CONTRIB_MARGIN]), f"{sim_service_res[COL_CONTRIB_MARGIN]-base_service_res[COL_CONTRIB_MARGIN]:,.0f}")
-                         # Safely calculate BEP delta
-                         bep_base_val = base_service_res[COL_BREAK_EVEN]
-                         bep_sim_val = sim_service_res[COL_BREAK_EVEN]
-                         bep_delta = bep_sim_val - bep_base_val if np.isfinite(bep_sim_val) and np.isfinite(bep_base_val) else "N/A"
-                         bep_delta_str = f"{bep_delta:.1f}" if isinstance(bep_delta, (int, float)) else bep_delta
-                         bep_sim_display = "{:.1f}".format(bep_sim_val) if np.isfinite(bep_sim_val) else "∞"
-                         sim_comp_cols[2].metric(get_text('sim_detail_bep'), bep_sim_display, bep_delta_str )
-                         sim_comp_cols[3].metric(get_text('sim_detail_profit'), egp_format(sim_service_res[COL_PROFIT_EXPECTED]), f"{sim_service_res[COL_PROFIT_EXPECTED]-base_service_res[COL_PROFIT_EXPECTED]:,.0f}")
+                             # Compare Price, CM, BEP, Profit
+                             sim_comp_cols[0].metric(get_text('sim_detail_price'), egp_format(sim_service_res[COL_PRICE_PER_CASE]), f"{sim_service_res[COL_PRICE_PER_CASE]-base_service_res[COL_PRICE_PER_CASE]:,.0f}")
+                             sim_comp_cols[1].metric(get_text('sim_detail_cm'), egp_format(sim_service_res[COL_CONTRIB_MARGIN]), f"{sim_service_res[COL_CONTRIB_MARGIN]-base_service_res[COL_CONTRIB_MARGIN]:,.0f}")
+                             # Safely calculate BEP delta
+                             bep_base_val = base_service_res[COL_BREAK_EVEN]
+                             bep_sim_val = sim_service_res[COL_BREAK_EVEN]
+                             bep_delta = bep_sim_val - bep_base_val if np.isfinite(bep_sim_val) and np.isfinite(bep_base_val) else "N/A"
+                             bep_delta_str = f"{bep_delta:.1f}" if isinstance(bep_delta, (int, float)) else bep_delta
+                             bep_sim_display = "{:.1f}".format(bep_sim_val) if np.isfinite(bep_sim_val) else "∞"
+                             sim_comp_cols[2].metric(get_text('sim_detail_bep'), bep_sim_display, bep_delta_str )
+                             sim_comp_cols[3].metric(get_text('sim_detail_profit'), egp_format(sim_service_res[COL_PROFIT_EXPECTED]), f"{sim_service_res[COL_PROFIT_EXPECTED]-base_service_res[COL_PROFIT_EXPECTED]:,.0f}")
 
                  # Full Simulated Results Table
                  st.markdown(f"--- \n {get_text('sim_table_header')}")
@@ -1149,46 +1185,49 @@ with tab2:
         with analysis_tab3:
             st.subheader(get_text('sens_header'))
             st.markdown(get_text('sens_intro'))
+            # Ensure base_results_df exists and is not empty
+            if base_results_df is not None and not base_results_df.empty:
+                service_names_options_sens = base_results_df[COL_NAME_EN].tolist()
+                if not service_names_options_sens:
+                    st.info(get_text('sens_no_service'))
+                else:
+                    selected_service_sens = st.selectbox(get_text('sens_select_service'), options=service_names_options_sens, key="sens_select")
 
-            service_names_options_sens = base_results_df[COL_NAME_EN].tolist()
-            if not service_names_options_sens:
-                 st.info(get_text('sens_no_service'))
+                    if selected_service_sens:
+                        service_data_row = base_results_df[base_results_df[COL_NAME_EN] == selected_service_sens]
+                        if not service_data_row.empty:
+                            service_data_sens = service_data_row.iloc[0]
+                            st.markdown(f"{get_text('sens_analyzing')} **{selected_service_sens}**")
+                            expected_cases_display = int(service_data_sens[COL_EXPECTED_CASES])
+
+                            sens_cols = st.columns(3)
+                            min_cases = sens_cols[0].number_input(get_text('sens_min_cases'), 1, value=max(1, int(expected_cases_display * 0.2)), step=1, key="sens_min", help=get_text('sens_min_cases_help'))
+                            max_cases = sens_cols[1].number_input(get_text('sens_max_cases'), int(min_cases)+1, value=int(expected_cases_display * 2.0), step=5, key="sens_max", help=get_text('sens_max_cases_help'))
+                            step_cases = sens_cols[2].number_input(get_text('sens_step'), 1, value=max(1, int((max_cases - min_cases)/10) if (max_cases - min_cases)>0 else 1), step=1, key="sens_step", help=get_text('sens_step_help'))
+
+                            if max_cases <= min_cases: st.error(get_text('sens_error_range'))
+                            else:
+                                try:
+                                    cases_range_list = list(range(int(min_cases), int(max_cases) + 1, int(step_cases)))
+                                    if not cases_range_list: st.warning(get_text('sens_error_step'))
+                                    else:
+                                        prices, break_evens = calculate_sensitivity(
+                                            variable_cost=float(service_data_sens[COL_VAR_COST]),
+                                            allocated_fixed_cost=float(service_data_sens[COL_ALLOC_FIXED_COST]), # Use base allocated cost
+                                            margin=float(base_margin), # Use base margin
+                                            cases_range=cases_range_list
+                                        )
+                                        sensitivity_fig = plot_sensitivity(cases_range_list, prices, break_evens)
+                                        if sensitivity_fig:
+                                            st.pyplot(sensitivity_fig)
+                                        else:
+                                            st.warning("Could not generate sensitivity plot.") # Should be caught by plot function ideally
+                                except ValueError:
+                                    st.error("Please ensure Min/Max/Step cases are valid integers.")
+                        else:
+                            st.warning("Selected service data not found.")
             else:
-                selected_service_sens = st.selectbox(get_text('sens_select_service'), options=service_names_options_sens, key="sens_select")
-
-                if selected_service_sens:
-                     service_data_row = base_results_df[base_results_df[COL_NAME_EN] == selected_service_sens]
-                     if not service_data_row.empty:
-                         service_data_sens = service_data_row.iloc[0]
-                         st.markdown(f"{get_text('sens_analyzing')} **{selected_service_sens}**")
-                         expected_cases_display = int(service_data_sens[COL_EXPECTED_CASES])
-
-                         sens_cols = st.columns(3)
-                         min_cases = sens_cols[0].number_input(get_text('sens_min_cases'), 1, value=max(1, int(expected_cases_display * 0.2)), step=1, key="sens_min", help=get_text('sens_min_cases_help'))
-                         max_cases = sens_cols[1].number_input(get_text('sens_max_cases'), int(min_cases)+1, value=int(expected_cases_display * 2.0), step=5, key="sens_max", help=get_text('sens_max_cases_help'))
-                         step_cases = sens_cols[2].number_input(get_text('sens_step'), 1, value=max(1, int((max_cases - min_cases)/10) if (max_cases - min_cases)>0 else 1), step=1, key="sens_step", help=get_text('sens_step_help'))
-
-                         if max_cases <= min_cases: st.error(get_text('sens_error_range'))
-                         else:
-                             try:
-                                 cases_range_list = list(range(int(min_cases), int(max_cases) + 1, int(step_cases)))
-                                 if not cases_range_list: st.warning(get_text('sens_error_step'))
-                                 else:
-                                     prices, break_evens = calculate_sensitivity(
-                                         variable_cost=float(service_data_sens[COL_VAR_COST]),
-                                         allocated_fixed_cost=float(service_data_sens[COL_ALLOC_FIXED_COST]), # Use base allocated cost
-                                         margin=float(base_margin), # Use base margin
-                                         cases_range=cases_range_list
-                                     )
-                                     sensitivity_fig = plot_sensitivity(cases_range_list, prices, break_evens)
-                                     if sensitivity_fig:
-                                         st.pyplot(sensitivity_fig)
-                                     else:
-                                         st.warning("Could not generate sensitivity plot.") # Should be caught by plot function ideally
-                             except ValueError:
-                                  st.error("Please ensure Min/Max/Step cases are valid integers.")
-                     else:
-                          st.warning("Selected service data not found.")
+                 st.info(get_text('sens_no_service'))
 
 
 # --- END OF FILE main_redesigned.py ---
