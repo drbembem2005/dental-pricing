@@ -389,7 +389,8 @@ def load_app_data(file_path: str) -> Tuple[Dict[str, Any], pd.DataFrame]:
                     else: services_df[col] = 0.0
             services_df = services_df[default_cols] # Ensure correct column order
 
-            st.success(f"{get_text('data_loaded')} ({os.path.basename(file_path)})")
+            # Don't show success message on every run, only maybe on first load or reset
+            # st.success(f"{get_text('data_loaded')} ({os.path.basename(file_path)})")
             return settings, services_df
         else:
             st.info(f"{get_text('error_loading')} ({os.path.basename(file_path)})")
@@ -447,26 +448,29 @@ def validate_service_data(df: pd.DataFrame) -> Tuple[bool, List[str]]:
         errors.append(get_text('valid_err_empty_name'))
 
     # Check for duplicate display names (case-insensitive check is safer)
-    duplicates = df[df.duplicated(subset=[COL_NAME_EN], keep=False)][COL_NAME_EN].unique()
-    if len(duplicates) > 0:
-        errors.append(get_text('valid_err_duplicate_name').format(', '.join(duplicates)))
+    # Ensure the column exists before checking duplicates
+    if COL_NAME_EN in df.columns:
+        duplicates = df[df.duplicated(subset=[COL_NAME_EN], keep=False)][COL_NAME_EN].unique()
+        if len(duplicates) > 0:
+            errors.append(get_text('valid_err_duplicate_name').format(', '.join(duplicates)))
 
     # Convert numeric columns, coercing errors, then check validity
     numeric_cols = [COL_EXPECTED_CASES, COL_VAR_COST, COL_DURATION]
     for col in numeric_cols:
-        # Try conversion, store result temporarily
-        numeric_series = pd.to_numeric(df[col], errors='coerce')
+         if col in df.columns: # Check column exists
+            # Try conversion, store result temporarily
+            numeric_series = pd.to_numeric(df[col], errors='coerce')
 
-        if numeric_series.isnull().any():
-            errors.append(get_text('valid_err_non_numeric').format(col))
-        else:
-            # Check for negative values only if conversion succeeded
-            if col in [COL_EXPECTED_CASES, COL_VAR_COST]:
-                if (numeric_series < 0).any():
-                    errors.append(get_text('valid_err_negative').format(col))
-            elif col == COL_DURATION:
-                if (numeric_series <= 0).any():
-                    errors.append(get_text('valid_err_zero_dur')) # Duration must be > 0
+            if numeric_series.isnull().any():
+                errors.append(get_text('valid_err_non_numeric').format(col))
+            else:
+                # Check for negative values only if conversion succeeded
+                if col in [COL_EXPECTED_CASES, COL_VAR_COST]:
+                    if (numeric_series < 0).any():
+                        errors.append(get_text('valid_err_negative').format(col))
+                elif col == COL_DURATION:
+                    if (numeric_series <= 0).any():
+                        errors.append(get_text('valid_err_zero_dur')) # Duration must be > 0
 
     return not errors, errors
 
@@ -480,13 +484,22 @@ def calculate_detailed_pricing(services_df_input: pd.DataFrame, total_fixed_cost
     # --- Ensure Correct Data Types for Calculation ---
     # Re-apply coercion here as data might come directly from editor
     try:
-        calc_df[COL_EXPECTED_CASES] = pd.to_numeric(calc_df[COL_EXPECTED_CASES], errors='coerce').fillna(0).astype(int)
-        calc_df[COL_VAR_COST] = pd.to_numeric(calc_df[COL_VAR_COST], errors='coerce').fillna(0.0).astype(float)
-        calc_df[COL_DURATION] = pd.to_numeric(calc_df[COL_DURATION], errors='coerce').fillna(0.1).astype(float) # Fill duration NA with small positive
-        # Ensure duration is positive after potential fillna
-        calc_df[COL_DURATION] = calc_df[COL_DURATION].apply(lambda x: max(x, 0.01)) # Ensure duration > 0
+        if COL_EXPECTED_CASES in calc_df.columns:
+            calc_df[COL_EXPECTED_CASES] = pd.to_numeric(calc_df[COL_EXPECTED_CASES], errors='coerce').fillna(0).astype(int)
+        if COL_VAR_COST in calc_df.columns:
+            calc_df[COL_VAR_COST] = pd.to_numeric(calc_df[COL_VAR_COST], errors='coerce').fillna(0.0).astype(float)
+        if COL_DURATION in calc_df.columns:
+            calc_df[COL_DURATION] = pd.to_numeric(calc_df[COL_DURATION], errors='coerce').fillna(0.1).astype(float) # Fill duration NA with small positive
+            # Ensure duration is positive after potential fillna
+            calc_df[COL_DURATION] = calc_df[COL_DURATION].apply(lambda x: max(x, 0.01)) # Ensure duration > 0
     except Exception as e:
          st.error(f"Internal Error: Data type conversion failed: {e}")
+         return None
+
+    # Check if required columns for calculation are present after conversion attempt
+    required_calc_cols = [COL_EXPECTED_CASES, COL_VAR_COST, COL_DURATION]
+    if not all(col in calc_df.columns for col in required_calc_cols):
+         st.error("Internal Error: Missing required columns for calculation.")
          return None
 
     # --- Core Calculations ---
@@ -546,62 +559,69 @@ def calculate_detailed_pricing(services_df_input: pd.DataFrame, total_fixed_cost
 
     return calc_df
 
-# ---!!! CORRECTED PLOT FUNCTION !!!---
+# ---!!! CORRECTED PLOT FUNCTION (Attempt 2) !!!---
 def plot_bar_chart(df: pd.DataFrame, x_col: str, y_col: str, title_key: str, ylabel_key: str, tooltip_key: str, sort_by_y=True, color='skyblue'):
-    """Helper to create a formatted bar chart using Pandas plotting integration."""
+    """Helper to create a formatted bar chart using Pandas plotting and explicit ticks."""
     if df is None or df.empty or x_col not in df.columns or y_col not in df.columns:
         st.caption(get_text('plot_nodata'))
         return None
 
     # Ensure y_col is numeric for plotting and sorting
     df[y_col] = pd.to_numeric(df[y_col], errors='coerce')
-    plot_df = df.dropna(subset=[y_col]).copy() # Drop rows where y_col is NaN
+    plot_df = df.dropna(subset=[y_col]).copy()
 
     if plot_df.empty:
         st.caption(get_text('plot_nodata'))
         return None
 
-    # Sort if requested
     if sort_by_y:
         plot_df = plot_df.sort_values(by=y_col, ascending=False)
 
-    # --- Changes Start Here ---
-    fig, ax = plt.subplots(figsize=(10, 7)) # Slightly taller figure for rotated labels + tooltip
+    fig, ax = plt.subplots(figsize=(10, 7)) # Adjust size as needed
 
     # Use Pandas plotting method directly on the axes
-    plot_df.plot(kind='bar', x=x_col, y=y_col, ax=ax, color=color, legend=False) # Plot onto ax
+    # IMPORTANT: Reset index here so that bar locations are 0, 1, 2...
+    plot_df.reset_index(drop=True).plot(kind='bar', x=x_col, y=y_col, ax=ax, color=color, legend=False)
 
-    # Set title and labels (no change)
+    # Set title and labels
     ax.set_title(get_text(title_key), fontsize=14, fontweight='bold')
     ax.set_xlabel(get_text('plot_service'), fontsize=12)
     ax.set_ylabel(get_text(ylabel_key), fontsize=12)
 
-    # Apply tick parameters AFTER Pandas plotting (usually works better)
-    ax.tick_params(axis='x', rotation=45, labelsize=10, ha='right')
+    # --- Explicitly set X-axis ticks and labels ---
+    # Get locations (0, 1, 2... for the number of bars)
+    tick_locations = np.arange(len(plot_df))
+    # Get labels from the dataframe column
+    tick_labels = plot_df[x_col].tolist()
+
+    # Set the ticks and apply rotation/formatting directly to labels
+    ax.set_xticks(tick_locations)
+    ax.set_xticklabels(tick_labels, rotation=45, ha='right', fontsize=10)
+    # --- End of explicit X-axis tick setting ---
+
+    # Keep Y-axis tick parameters (this seemed fine)
     ax.tick_params(axis='y', labelsize=10)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: format(int(x), ',')))
     ax.grid(axis='y', linestyle='--', alpha=0.7)
 
-    # Add bar labels using the container created by Pandas plot
+    # Add bar labels
     if ax.containers:
-        try: # Add try-except for robustness, although it should find containers
+        try:
             ax.bar_label(ax.containers[0], fmt='{:,.0f}', fontsize=9, padding=3)
         except IndexError:
              st.warning("Could not add bar labels to plot.")
 
-
-    # Add tooltip (adjust vertical position if needed)
+    # Add tooltip
     tooltip_text = get_text(tooltip_key)
-    # Adjust fig.text y-position (e.g., -0.15 or -0.2) if it overlaps with long rotated labels
     fig.text(0.5, -0.15, tooltip_text, ha='center', va='bottom', fontsize=9, style='italic', wrap=True,
              bbox=dict(boxstyle='round,pad=0.3', fc='lightyellow', alpha=0.6))
 
-    # Use tight_layout, possibly adjusting rect if tooltip/labels overlap
+    # Adjust layout slightly more if needed
     fig.tight_layout(rect=[0, 0.05, 1, 0.95])
-    # --- Changes End Here ---
 
     return fig
 # ---!!! END OF CORRECTED PLOT FUNCTION !!!---
+
 
 # Sensitivity calculation remains the same logic
 def calculate_sensitivity(variable_cost: float, allocated_fixed_cost: float, margin: float, cases_range: List[int]) -> Tuple[List[float], List[float]]:
@@ -707,10 +727,12 @@ with st.sidebar:
     st.header(get_text('sidebar_title'))
 
     # Use a dictionary to manage settings in session state for easier saving/loading
-    current_settings = st.session_state[STATE_SETTINGS]
+    # Make a deep copy to avoid modifying state directly before check
+    current_settings = st.session_state[STATE_SETTINGS].copy()
     settings_changed = False # Flag to track if we need to save
 
     with st.expander(get_text('fixed_costs_header'), expanded=True):
+        # Use values from the copied dictionary
         rent = st.number_input(get_text('rent'), min_value=0.0, value=float(current_settings['rent']), step=500.0, key="rent_sb", format="%f")
         salaries = st.number_input(get_text('salaries'), min_value=0.0, value=float(current_settings['salaries']), step=500.0, key="salaries_sb", format="%f")
         utilities = st.number_input(get_text('utilities'), min_value=0.0, value=float(current_settings['utilities']), step=200.0, key="utilities_sb", format="%f")
@@ -721,10 +743,15 @@ with st.sidebar:
         current_total_fixed_cost = rent + salaries + utilities + insurance + marketing + other_fixed
         st.metric(label=f"**{get_text('total_fixed_cost')}**", value=egp_format(current_total_fixed_cost))
 
-        # Update settings in state if they changed
-        if (rent != current_settings['rent'] or salaries != current_settings['salaries'] or
-            utilities != current_settings['utilities'] or insurance != current_settings['insurance'] or
-            marketing != current_settings['marketing'] or other_fixed != current_settings['other_fixed']):
+        # Check against original state values before updating copied dict
+        if (rent != st.session_state[STATE_SETTINGS]['rent'] or
+            salaries != st.session_state[STATE_SETTINGS]['salaries'] or
+            utilities != st.session_state[STATE_SETTINGS]['utilities'] or
+            insurance != st.session_state[STATE_SETTINGS]['insurance'] or
+            marketing != st.session_state[STATE_SETTINGS]['marketing'] or
+            other_fixed != st.session_state[STATE_SETTINGS]['other_fixed']):
+
+            # Update the temporary dictionary
             current_settings['rent'] = rent
             current_settings['salaries'] = salaries
             current_settings['utilities'] = utilities
@@ -734,28 +761,32 @@ with st.sidebar:
             settings_changed = True
 
     with st.expander(get_text('margin_header'), expanded=True):
+        # Use value from copied dictionary for slider default
         current_margin_percentage = st.slider(
             get_text('margin_label'), 0, 200,
-            int(current_settings['base_margin'] * 100), 5,
+            int(current_settings.get('base_margin', 0.35) * 100), # Use .get for safety
+            5,
             key="margin_slider_sb",
             help=get_text('margin_help'))
         current_margin = current_margin_percentage / 100.0
         st.info(f"{get_text('margin_display')}: {current_margin_percentage}%", icon="🎯")
 
-        # Update margin in state if changed
-        if current_margin != current_settings['base_margin']:
-            current_settings['base_margin'] = current_margin
-            settings_changed = True
+        # Check against original state before updating copied dict
+        if current_margin != st.session_state[STATE_SETTINGS].get('base_margin', 0.35):
+             current_settings['base_margin'] = current_margin # Update temp dict
+             settings_changed = True
 
-    # Save settings if they changed
+    # Save settings only if they changed
     if settings_changed:
-        st.session_state[STATE_SETTINGS] = current_settings # Update state
-        save_app_data(DATA_FILE, current_settings, st.session_state[STATE_SERVICES_DF_INPUT]) # Save all
+        st.session_state[STATE_SETTINGS] = current_settings # Update state with modified dict
+        save_app_data(DATA_FILE, st.session_state[STATE_SETTINGS], st.session_state[STATE_SERVICES_DF_INPUT]) # Save all
 
     st.divider()
     # Reset button
     if st.button(get_text('reset_button'), key="reset_btn"):
-        if st.checkbox(get_text('reset_confirm'), key="reset_confirm_cb"):
+        # Add confirmation checkbox for safety
+        confirm = st.checkbox(get_text('reset_confirm'), key="reset_confirm_cb")
+        if confirm:
             # Clear relevant session state keys
             keys_to_reset = [STATE_SETTINGS, STATE_SERVICES_DF_INPUT, STATE_RESULTS_DF, STATE_CALCULATED, STATE_SIMULATION_RESULTS_DF]
             for key in keys_to_reset:
@@ -763,8 +794,11 @@ with st.sidebar:
                     del st.session_state[key]
             # Delete the data file to ensure reload uses defaults
             if os.path.exists(DATA_FILE):
-                try: os.remove(DATA_FILE)
-                except Exception as e: st.warning(f"Could not delete data file '{DATA_FILE}': {e}")
+                try:
+                    os.remove(DATA_FILE)
+                    st.success(f"Removed data file '{DATA_FILE}'.")
+                except Exception as e:
+                    st.warning(f"Could not delete data file '{DATA_FILE}': {e}")
             st.success("Reset complete. Rerunning...")
             st.rerun() # Rerun the app to re-initialize with defaults
 
@@ -781,14 +815,17 @@ with tab1:
 
     # Display Fixed Costs Summary (read-only confirmation)
     with st.expander(get_text('fixed_cost_summary'), expanded=False):
+        # Read directly from session state for display here
+        display_settings = st.session_state.get(STATE_SETTINGS, get_default_settings())
+        display_total_fixed = sum(float(v) for k, v in display_settings.items() if k != 'base_margin')
         st.json({
-            get_text('rent'): egp_format(current_settings['rent']),
-            get_text('salaries'): egp_format(current_settings['salaries']),
-            get_text('utilities'): egp_format(current_settings['utilities']),
-            get_text('insurance'): egp_format(current_settings['insurance']),
-            get_text('marketing'): egp_format(current_settings['marketing']),
-            get_text('other_fixed'): egp_format(current_settings['other_fixed']),
-            f"**{get_text('total_fixed_cost')}**": f"**{egp_format(current_total_fixed_cost)}**"
+            get_text('rent'): egp_format(display_settings.get('rent', 0)),
+            get_text('salaries'): egp_format(display_settings.get('salaries', 0)),
+            get_text('utilities'): egp_format(display_settings.get('utilities', 0)),
+            get_text('insurance'): egp_format(display_settings.get('insurance', 0)),
+            get_text('marketing'): egp_format(display_settings.get('marketing', 0)),
+            get_text('other_fixed'): egp_format(display_settings.get('other_fixed', 0)),
+            f"**{get_text('total_fixed_cost')}**": f"**{egp_format(display_total_fixed)}**"
         })
         st.caption(get_text('fixed_cost_caption'))
     st.divider()
@@ -807,6 +844,10 @@ with tab1:
     }
 
     # The data_editor modifies a copy, we need to update state and save
+    # Ensure the dataframe in state is valid before passing to editor
+    if STATE_SERVICES_DF_INPUT not in st.session_state or not isinstance(st.session_state[STATE_SERVICES_DF_INPUT], pd.DataFrame):
+         st.session_state[STATE_SERVICES_DF_INPUT] = get_default_services() # Reset if invalid
+
     edited_df = st.data_editor(
         st.session_state[STATE_SERVICES_DF_INPUT],
         num_rows="dynamic",
@@ -826,15 +867,18 @@ with tab1:
         st.session_state[STATE_RESULTS_DF] = None
         st.session_state[STATE_SIMULATION_RESULTS_DF] = None
         st.toast("Service list updated and saved.", icon="📝")
+        # Rerun might be needed if clearing results should immediately hide sections
+        # st.rerun()
 
 
     # --- Validation Feedback ---
-    is_valid, errors = validate_service_data(edited_df) # Validate the current state
+    is_valid, errors = validate_service_data(edited_df) # Validate the current state of the editor df
     if not is_valid:
         st.warning(get_text('validation_warn'), icon="⚠️")
         for error in errors:
             st.markdown(f"- {error}")
-    else:
+    # Only show success if no errors AND the dataframe is not empty
+    elif not edited_df.empty:
         st.success(get_text('validation_ok'), icon="✅")
 
     st.divider()
@@ -843,17 +887,33 @@ with tab1:
     st.header(get_text('step2_header'))
     st.markdown(get_text('step2_intro'))
 
-    calculate_button = st.button(get_text('calculate_button'), type="primary", use_container_width=True, disabled=not is_valid)
+    # Disable button if data is invalid OR if the editor df is empty
+    calculate_button_disabled = not is_valid or edited_df.empty
+    calculate_button = st.button(
+        get_text('calculate_button'),
+        type="primary",
+        use_container_width=True,
+        disabled=calculate_button_disabled
+    )
+
 
     if calculate_button:
-        if not is_valid:
+        # Re-check validity just before calculation as a safeguard
+        is_valid_on_calc, errors_on_calc = validate_service_data(st.session_state[STATE_SERVICES_DF_INPUT])
+        if not is_valid_on_calc:
             st.error(get_text('calculate_error'))
+            # Optionally display errors again
+            # for error in errors_on_calc: st.markdown(f"- {error}")
         else:
             # Use the validated data from the editor's current state
+            calc_settings = st.session_state.get(STATE_SETTINGS, get_default_settings())
+            calc_total_fixed = sum(float(v) for k, v in calc_settings.items() if k != 'base_margin')
+            calc_margin = float(calc_settings.get('base_margin', 0.35))
+
             results = calculate_detailed_pricing(
-                st.session_state[STATE_SERVICES_DF_INPUT],
-                current_total_fixed_cost,
-                st.session_state[STATE_SETTINGS]['base_margin'] # Use margin from settings state
+                st.session_state[STATE_SERVICES_DF_INPUT], # Use current state df
+                calc_total_fixed,
+                calc_margin
             )
             if results is not None:
                 st.session_state[STATE_RESULTS_DF] = results
@@ -869,7 +929,8 @@ with tab1:
     # --- Display Results & KPIs (if calculated) ---
     st.divider()
     st.header(get_text('step3_header'))
-    if st.session_state[STATE_CALCULATED] and st.session_state[STATE_RESULTS_DF] is not None:
+    # Check calculation flag and ensure results DF is not None and not empty
+    if st.session_state.get(STATE_CALCULATED, False) and isinstance(st.session_state.get(STATE_RESULTS_DF), pd.DataFrame) and not st.session_state[STATE_RESULTS_DF].empty:
         results_df = st.session_state[STATE_RESULTS_DF]
 
         # --- KPIs ---
@@ -879,16 +940,17 @@ with tab1:
             total_revenue = results_df[COL_REVENUE_EXPECTED].sum()
             total_profit = results_df[COL_PROFIT_EXPECTED].sum()
             total_var_cost = (results_df[COL_VAR_COST] * results_df[COL_EXPECTED_CASES]).sum()
-            # Use the fixed cost that was *used* in the calculation (which is current_total_fixed_cost)
-            total_fixed_cost_used = current_total_fixed_cost
-            overall_margin_pct = (total_profit / total_revenue * 100) if total_revenue else 0
+            # Use the fixed cost that was *used* in the calculation
+            calc_settings_kpi = st.session_state.get(STATE_SETTINGS, get_default_settings())
+            total_fixed_cost_used = sum(float(v) for k, v in calc_settings_kpi.items() if k != 'base_margin')
+
+            overall_margin_pct = (total_profit / total_revenue * 100) if total_revenue != 0 else 0
             total_cm = (results_df[COL_CONTRIB_MARGIN] * results_df[COL_EXPECTED_CASES]).sum()
-            # Weighted Average CM Ratio based on revenue share would be more complex, use simple average based on total CM / total Revenue
-            weighted_avg_cm_ratio = (total_cm / total_revenue) if total_revenue else 0
+            weighted_avg_cm_ratio = (total_cm / total_revenue) if total_revenue != 0 else 0
             total_break_even_revenue = (total_fixed_cost_used / weighted_avg_cm_ratio) if weighted_avg_cm_ratio > 0 else float('inf')
             total_hours = results_df[COL_SERVICE_HOURS].sum()
-            avg_revenue_per_hour = total_revenue / total_hours if total_hours else 0
-            avg_cm_per_hour = total_cm / total_hours if total_hours else 0
+            avg_revenue_per_hour = total_revenue / total_hours if total_hours != 0 else 0
+            avg_cm_per_hour = total_cm / total_hours if total_hours != 0 else 0
 
             kp_cols = st.columns(4)
             kp_cols[0].metric(get_text('kpi_total_revenue'), egp_format(total_revenue), help=get_text('kpi_total_revenue_help'))
@@ -941,39 +1003,48 @@ with tab1:
                 COL_CONTRIB_MARGIN_RATIO: "{:.1f}%",
                 COL_BREAK_EVEN: lambda x: "{:.1f}".format(x) if np.isfinite(x) else "∞" # Show infinity for BEP
             }).set_tooltips(
-                pd.DataFrame([results_tooltips]), # Pass tooltips as a DataFrame matching columns
-                props='visibility: hidden; position: absolute; background-color: #fafa9 SQA; border: 1px solid #ccc; padding: 5px; z-index: 1; text-align: left;'
+                pd.DataFrame({col:[results_tooltips.get(col,"")] for col in display_cols}), # Ensure tooltips match selected cols
+                props='visibility: hidden; position: absolute; background-color: #eee; border: 1px solid #ccc; padding: 5px; z-index: 10; text-align: left; max-width: 150px;' # Added max-width
             ).background_gradient(cmap='Greens', subset=[COL_CONTRIB_MARGIN_RATIO]), # Apply gradient only to CM Ratio
          hide_index=True, use_container_width=True)
 
         # --- Download Button ---
-        csv_data = convert_df_to_csv(display_df_final[display_cols])
-        st.download_button(
-            label=get_text('download_button'),
-            data=csv_data,
-            file_name="dental_clinic_pricing_results.csv",
-            mime="text/csv",
-            key="download_results_btn"
-        )
+        try: # Add error handling for CSV conversion
+            csv_data = convert_df_to_csv(display_df_final[display_cols])
+            st.download_button(
+                label=get_text('download_button'),
+                data=csv_data,
+                file_name="dental_clinic_pricing_results.csv",
+                mime="text/csv",
+                key="download_results_btn"
+            )
+        except Exception as e:
+             st.error(f"Error preparing download: {e}")
 
-    elif not st.session_state[STATE_CALCULATED]:
+
+    # Show info message if calculation hasn't happened or resulted in empty df
+    elif not st.session_state.get(STATE_CALCULATED, False):
         st.info(get_text('results_info'), icon="👆")
+    # Handle case where calculation ran but result was None or empty
+    elif st.session_state.get(STATE_CALCULATED, False) and (st.session_state.get(STATE_RESULTS_DF) is None or st.session_state[STATE_RESULTS_DF].empty):
+         st.warning("Calculation resulted in no data to display. Please check inputs.", icon="🤔")
 
 
 # === TAB 2: Analysis & Simulation ===
 with tab2:
     st.header(get_text('analysis_header'))
 
-    if not st.session_state[STATE_CALCULATED] or st.session_state[STATE_RESULTS_DF] is None:
+    # Check calculation flag and ensure results DF is not None and not empty
+    if not st.session_state.get(STATE_CALCULATED, False) or not isinstance(st.session_state.get(STATE_RESULTS_DF), pd.DataFrame) or st.session_state[STATE_RESULTS_DF].empty:
         st.warning(get_text('analysis_warning'), icon="⚠️")
     else:
-        # Retrieve base results and parameters from state
-        base_results_df = st.session_state[STATE_RESULTS_DF]
-        # Important: Use the settings/inputs that *generated* the base results
-        base_fixed_cost = sum(float(v) for k, v in st.session_state[STATE_SETTINGS].items() if k not in ['base_margin']) # Ensure float sum
-        base_margin = float(st.session_state[STATE_SETTINGS]['base_margin']) # Ensure float
+        # Retrieve base results and parameters from state safely
+        base_results_df = st.session_state[STATE_RESULTS_DF] # Known to be a non-empty DF here
+        base_settings = st.session_state.get(STATE_SETTINGS, get_default_settings())
+        base_fixed_cost = sum(float(v) for k, v in base_settings.items() if k != 'base_margin')
+        base_margin = float(base_settings.get('base_margin', 0.35))
         # The input DF used for the calculation is the one currently in state
-        base_services_df_input = st.session_state[STATE_SERVICES_DF_INPUT]
+        base_services_df_input = st.session_state.get(STATE_SERVICES_DF_INPUT) # Could be None if state messed up, check later
 
         analysis_tab1, analysis_tab2, analysis_tab3 = st.tabs([
             get_text('analysis_tab_visual'),
@@ -1019,11 +1090,8 @@ with tab2:
                 sim_margin = sim_margin_pct / 100.0
 
                 st.markdown(get_text('sim_specific_adjust'))
-                # Ensure base_results_df exists and is not empty before creating options
-                if base_results_df is not None and not base_results_df.empty:
-                     service_options = [get_text('sim_option_none')] + base_results_df[COL_NAME_EN].tolist()
-                else:
-                     service_options = [get_text('sim_option_none')]
+                # Options depend on base_results_df which is guaranteed non-empty here
+                service_options = [get_text('sim_option_none')] + base_results_df[COL_NAME_EN].tolist()
 
                 selected_service_sim = st.selectbox(get_text('sim_select_service'), options=service_options, key="sim_service_select_in_form", index=0)
 
@@ -1033,14 +1101,12 @@ with tab2:
                 modified_service_idx = None
 
                 if selected_service_sim != get_text('sim_option_none'):
-                    # Find row in the *input* DataFrame corresponding to selection
-                    # Ensure base_services_df_input is a DataFrame and not empty
-                    if base_services_df_input is not None and not base_services_df_input.empty:
+                     # Ensure base_services_df_input exists and is a DataFrame before indexing
+                    if isinstance(base_services_df_input, pd.DataFrame) and not base_services_df_input.empty:
                          service_input_row = base_services_df_input[base_services_df_input[COL_NAME_EN] == selected_service_sim]
                          if not service_input_row.empty:
                             modified_service_idx = service_input_row.index[0]
                             sim_spec_cols = st.columns(3)
-                            # Use values from the INPUT dataframe as defaults for simulation overrides
                             sim_var_cost_override = sim_spec_cols[0].number_input(get_text('sim_var_cost_label'), value=float(service_input_row[COL_VAR_COST].iloc[0]), format="%.2f", key="sim_vc", min_value=0.0)
                             sim_cases_override = sim_spec_cols[1].number_input(get_text('sim_cases_label'), value=int(service_input_row[COL_EXPECTED_CASES].iloc[0]), key="sim_ec", min_value=0, step=1)
                             sim_duration_override = sim_spec_cols[2].number_input(get_text('sim_duration_label'), value=float(service_input_row[COL_DURATION].iloc[0]), format="%.2f", key="sim_dur", min_value=0.01, step=0.1)
@@ -1054,9 +1120,8 @@ with tab2:
 
             # --- Simulation Results Display ---
             if submitted_sim:
-                # Prepare input DF copy for simulation
-                # Ensure base_services_df_input exists
-                if base_services_df_input is not None:
+                # Ensure base_services_df_input exists before trying to copy/modify
+                if isinstance(base_services_df_input, pd.DataFrame):
                     sim_services_df = base_services_df_input.copy()
                     if modified_service_idx is not None and selected_service_sim != get_text('sim_option_none'):
                         # Apply overrides safely using .loc
@@ -1084,57 +1149,56 @@ with tab2:
 
 
             # Display simulation results if they exist in state
-            if st.session_state[STATE_SIMULATION_RESULTS_DF] is not None:
+            # Check it's a non-empty DataFrame
+            if isinstance(st.session_state.get(STATE_SIMULATION_RESULTS_DF), pd.DataFrame) and not st.session_state[STATE_SIMULATION_RESULTS_DF].empty:
                  sim_results_df = st.session_state[STATE_SIMULATION_RESULTS_DF]
                  st.divider()
                  st.subheader(get_text('sim_results_header'))
 
-                 # Calculate Base KPIs again for comparison (using base_results_df)
-                 # Ensure base_results_df exists
-                 if base_results_df is not None:
-                     base_total_revenue = base_results_df[COL_REVENUE_EXPECTED].sum()
-                     base_total_profit = base_results_df[COL_PROFIT_EXPECTED].sum()
-                     base_overall_margin_pct = (base_total_profit / base_total_revenue * 100) if base_total_revenue else 0
-                     base_total_hours = base_results_df[COL_SERVICE_HOURS].sum()
-                     base_avg_revenue_per_hour = base_total_revenue / base_total_hours if base_total_hours else 0
+                 # Base KPIs are already calculated and stored in base_results_df (guaranteed non-empty here)
+                 base_total_revenue = base_results_df[COL_REVENUE_EXPECTED].sum()
+                 base_total_profit = base_results_df[COL_PROFIT_EXPECTED].sum()
+                 base_overall_margin_pct = (base_total_profit / base_total_revenue * 100) if base_total_revenue != 0 else 0
+                 base_total_hours = base_results_df[COL_SERVICE_HOURS].sum()
+                 base_avg_revenue_per_hour = base_total_revenue / base_total_hours if base_total_hours != 0 else 0
 
-                     # Calculate Simulated KPIs
-                     sim_total_revenue = sim_results_df[COL_REVENUE_EXPECTED].sum()
-                     sim_total_profit = sim_results_df[COL_PROFIT_EXPECTED].sum()
-                     sim_overall_margin_pct = (sim_total_profit / sim_total_revenue * 100) if sim_total_revenue else 0
-                     sim_total_hours = sim_results_df[COL_SERVICE_HOURS].sum()
-                     sim_avg_revenue_per_hour = sim_total_revenue / sim_total_hours if sim_total_hours else 0
+                 # Calculate Simulated KPIs
+                 sim_total_revenue = sim_results_df[COL_REVENUE_EXPECTED].sum()
+                 sim_total_profit = sim_results_df[COL_PROFIT_EXPECTED].sum()
+                 sim_overall_margin_pct = (sim_total_profit / sim_total_revenue * 100) if sim_total_revenue != 0 else 0
+                 sim_total_hours = sim_results_df[COL_SERVICE_HOURS].sum()
+                 sim_avg_revenue_per_hour = sim_total_revenue / sim_total_hours if sim_total_hours != 0 else 0
 
-                     st.markdown(get_text('sim_kpi_compare'))
-                     sim_kp_cols = st.columns(4)
-                     sim_kp_cols[0].metric(get_text('sim_kpi_revenue'), egp_format(sim_total_revenue), f"{sim_total_revenue-base_total_revenue:,.0f}")
-                     sim_kp_cols[1].metric(get_text('sim_kpi_profit'), egp_format(sim_total_profit), f"{sim_total_profit-base_total_profit:,.0f}")
-                     sim_kp_cols[2].metric(get_text('sim_kpi_margin'), f"{sim_overall_margin_pct:.1f}%", f"{sim_overall_margin_pct-base_overall_margin_pct:.1f}% pts")
-                     sim_kp_cols[3].metric(get_text('sim_kpi_rev_hr'), egp_format(sim_avg_revenue_per_hour), f"{sim_avg_revenue_per_hour-base_avg_revenue_per_hour:,.0f}")
+                 st.markdown(get_text('sim_kpi_compare'))
+                 sim_kp_cols = st.columns(4)
+                 sim_kp_cols[0].metric(get_text('sim_kpi_revenue'), egp_format(sim_total_revenue), f"{sim_total_revenue-base_total_revenue:,.0f}")
+                 sim_kp_cols[1].metric(get_text('sim_kpi_profit'), egp_format(sim_total_profit), f"{sim_total_profit-base_total_profit:,.0f}")
+                 sim_kp_cols[2].metric(get_text('sim_kpi_margin'), f"{sim_overall_margin_pct:.1f}%", f"{sim_overall_margin_pct-base_overall_margin_pct:.1f}% pts")
+                 sim_kp_cols[3].metric(get_text('sim_kpi_rev_hr'), egp_format(sim_avg_revenue_per_hour), f"{sim_avg_revenue_per_hour-base_avg_revenue_per_hour:,.0f}")
 
-                     # Detail Comparison for modified service
-                     if selected_service_sim != get_text('sim_option_none') and modified_service_idx is not None:
-                         # Check if service name exists in both dataframes
-                         base_row = base_results_df[base_results_df[COL_NAME_EN] == selected_service_sim]
-                         sim_row = sim_results_df[sim_results_df[COL_NAME_EN] == selected_service_sim]
+                 # Detail Comparison for modified service
+                 if selected_service_sim != get_text('sim_option_none') and modified_service_idx is not None:
+                     # Check if service name exists in both dataframes
+                     base_row = base_results_df[base_results_df[COL_NAME_EN] == selected_service_sim]
+                     sim_row = sim_results_df[sim_results_df[COL_NAME_EN] == selected_service_sim]
 
-                         if not base_row.empty and not sim_row.empty:
-                             st.markdown(f"--- \n {get_text('sim_detail_compare').format(selected_service_sim)}")
-                             sim_comp_cols = st.columns(4)
-                             base_service_res = base_row.iloc[0]
-                             sim_service_res = sim_row.iloc[0]
+                     if not base_row.empty and not sim_row.empty:
+                         st.markdown(f"--- \n {get_text('sim_detail_compare').format(selected_service_sim)}")
+                         sim_comp_cols = st.columns(4)
+                         base_service_res = base_row.iloc[0]
+                         sim_service_res = sim_row.iloc[0]
 
-                             # Compare Price, CM, BEP, Profit
-                             sim_comp_cols[0].metric(get_text('sim_detail_price'), egp_format(sim_service_res[COL_PRICE_PER_CASE]), f"{sim_service_res[COL_PRICE_PER_CASE]-base_service_res[COL_PRICE_PER_CASE]:,.0f}")
-                             sim_comp_cols[1].metric(get_text('sim_detail_cm'), egp_format(sim_service_res[COL_CONTRIB_MARGIN]), f"{sim_service_res[COL_CONTRIB_MARGIN]-base_service_res[COL_CONTRIB_MARGIN]:,.0f}")
-                             # Safely calculate BEP delta
-                             bep_base_val = base_service_res[COL_BREAK_EVEN]
-                             bep_sim_val = sim_service_res[COL_BREAK_EVEN]
-                             bep_delta = bep_sim_val - bep_base_val if np.isfinite(bep_sim_val) and np.isfinite(bep_base_val) else "N/A"
-                             bep_delta_str = f"{bep_delta:.1f}" if isinstance(bep_delta, (int, float)) else bep_delta
-                             bep_sim_display = "{:.1f}".format(bep_sim_val) if np.isfinite(bep_sim_val) else "∞"
-                             sim_comp_cols[2].metric(get_text('sim_detail_bep'), bep_sim_display, bep_delta_str )
-                             sim_comp_cols[3].metric(get_text('sim_detail_profit'), egp_format(sim_service_res[COL_PROFIT_EXPECTED]), f"{sim_service_res[COL_PROFIT_EXPECTED]-base_service_res[COL_PROFIT_EXPECTED]:,.0f}")
+                         # Compare Price, CM, BEP, Profit
+                         sim_comp_cols[0].metric(get_text('sim_detail_price'), egp_format(sim_service_res[COL_PRICE_PER_CASE]), f"{sim_service_res[COL_PRICE_PER_CASE]-base_service_res[COL_PRICE_PER_CASE]:,.0f}")
+                         sim_comp_cols[1].metric(get_text('sim_detail_cm'), egp_format(sim_service_res[COL_CONTRIB_MARGIN]), f"{sim_service_res[COL_CONTRIB_MARGIN]-base_service_res[COL_CONTRIB_MARGIN]:,.0f}")
+                         # Safely calculate BEP delta
+                         bep_base_val = base_service_res[COL_BREAK_EVEN]
+                         bep_sim_val = sim_service_res[COL_BREAK_EVEN]
+                         bep_delta = bep_sim_val - bep_base_val if np.isfinite(bep_sim_val) and np.isfinite(bep_base_val) else "N/A"
+                         bep_delta_str = f"{bep_delta:.1f}" if isinstance(bep_delta, (int, float)) else bep_delta
+                         bep_sim_display = "{:.1f}".format(bep_sim_val) if np.isfinite(bep_sim_val) else "∞"
+                         sim_comp_cols[2].metric(get_text('sim_detail_bep'), bep_sim_display, bep_delta_str )
+                         sim_comp_cols[3].metric(get_text('sim_detail_profit'), egp_format(sim_service_res[COL_PROFIT_EXPECTED]), f"{sim_service_res[COL_PROFIT_EXPECTED]-base_service_res[COL_PROFIT_EXPECTED]:,.0f}")
 
                  # Full Simulated Results Table
                  st.markdown(f"--- \n {get_text('sim_table_header')}")
@@ -1171,63 +1235,76 @@ with tab2:
                      hide_index=True, use_container_width=True
                  )
                  # Optional: Add download for simulation results too
-                 sim_csv_data = convert_df_to_csv(sim_display_df[sim_display_cols].rename(columns=sim_rename_map))
-                 st.download_button(
-                    label=get_text('download_button') + " (Simulation)",
-                    data=sim_csv_data,
-                    file_name="dental_clinic_simulation_results.csv",
-                    mime="text/csv",
-                    key="download_sim_results_btn"
-                 )
+                 try: # Add error handling for CSV conversion
+                    sim_csv_data = convert_df_to_csv(sim_display_df[sim_display_cols].rename(columns=sim_rename_map))
+                    st.download_button(
+                        label=get_text('download_button') + " (Simulation)",
+                        data=sim_csv_data,
+                        file_name="dental_clinic_simulation_results.csv",
+                        mime="text/csv",
+                        key="download_sim_results_btn"
+                    )
+                 except Exception as e:
+                     st.error(f"Error preparing simulation download: {e}")
 
 
         # --- Sensitivity Analysis ---
         with analysis_tab3:
             st.subheader(get_text('sens_header'))
             st.markdown(get_text('sens_intro'))
-            # Ensure base_results_df exists and is not empty
-            if base_results_df is not None and not base_results_df.empty:
-                service_names_options_sens = base_results_df[COL_NAME_EN].tolist()
-                if not service_names_options_sens:
-                    st.info(get_text('sens_no_service'))
-                else:
-                    selected_service_sens = st.selectbox(get_text('sens_select_service'), options=service_names_options_sens, key="sens_select")
-
-                    if selected_service_sens:
-                        service_data_row = base_results_df[base_results_df[COL_NAME_EN] == selected_service_sens]
-                        if not service_data_row.empty:
-                            service_data_sens = service_data_row.iloc[0]
-                            st.markdown(f"{get_text('sens_analyzing')} **{selected_service_sens}**")
-                            expected_cases_display = int(service_data_sens[COL_EXPECTED_CASES])
-
-                            sens_cols = st.columns(3)
-                            min_cases = sens_cols[0].number_input(get_text('sens_min_cases'), 1, value=max(1, int(expected_cases_display * 0.2)), step=1, key="sens_min", help=get_text('sens_min_cases_help'))
-                            max_cases = sens_cols[1].number_input(get_text('sens_max_cases'), int(min_cases)+1, value=int(expected_cases_display * 2.0), step=5, key="sens_max", help=get_text('sens_max_cases_help'))
-                            step_cases = sens_cols[2].number_input(get_text('sens_step'), 1, value=max(1, int((max_cases - min_cases)/10) if (max_cases - min_cases)>0 else 1), step=1, key="sens_step", help=get_text('sens_step_help'))
-
-                            if max_cases <= min_cases: st.error(get_text('sens_error_range'))
-                            else:
-                                try:
-                                    cases_range_list = list(range(int(min_cases), int(max_cases) + 1, int(step_cases)))
-                                    if not cases_range_list: st.warning(get_text('sens_error_step'))
-                                    else:
-                                        prices, break_evens = calculate_sensitivity(
-                                            variable_cost=float(service_data_sens[COL_VAR_COST]),
-                                            allocated_fixed_cost=float(service_data_sens[COL_ALLOC_FIXED_COST]), # Use base allocated cost
-                                            margin=float(base_margin), # Use base margin
-                                            cases_range=cases_range_list
-                                        )
-                                        sensitivity_fig = plot_sensitivity(cases_range_list, prices, break_evens)
-                                        if sensitivity_fig:
-                                            st.pyplot(sensitivity_fig)
-                                        else:
-                                            st.warning("Could not generate sensitivity plot.") # Should be caught by plot function ideally
-                                except ValueError:
-                                    st.error("Please ensure Min/Max/Step cases are valid integers.")
-                        else:
-                            st.warning("Selected service data not found.")
-            else:
+            # Base results df is guaranteed non-empty here
+            service_names_options_sens = base_results_df[COL_NAME_EN].tolist()
+            if not service_names_options_sens: # Should not happen based on outer check, but safe practice
                  st.info(get_text('sens_no_service'))
+            else:
+                selected_service_sens = st.selectbox(get_text('sens_select_service'), options=service_names_options_sens, key="sens_select")
+
+                if selected_service_sens:
+                     service_data_row = base_results_df[base_results_df[COL_NAME_EN] == selected_service_sens]
+                     if not service_data_row.empty:
+                         service_data_sens = service_data_row.iloc[0]
+                         st.markdown(f"{get_text('sens_analyzing')} **{selected_service_sens}**")
+                         # Ensure expected cases is treated as int
+                         try:
+                            expected_cases_display = int(service_data_sens[COL_EXPECTED_CASES])
+                         except (ValueError, TypeError):
+                            st.warning(f"Invalid expected cases value for {selected_service_sens}. Using 1.")
+                            expected_cases_display = 1
+
+
+                         sens_cols = st.columns(3)
+                         min_cases = sens_cols[0].number_input(get_text('sens_min_cases'), 1, value=max(1, int(expected_cases_display * 0.2)), step=1, key="sens_min", help=get_text('sens_min_cases_help'))
+                         max_cases = sens_cols[1].number_input(get_text('sens_max_cases'), int(min_cases)+1, value=int(expected_cases_display * 2.0), step=5, key="sens_max", help=get_text('sens_max_cases_help'))
+                         step_cases = sens_cols[2].number_input(get_text('sens_step'), 1, value=max(1, int((max_cases - min_cases)/10) if (max_cases - min_cases)>0 else 1), step=1, key="sens_step", help=get_text('sens_step_help'))
+
+                         if max_cases <= min_cases: st.error(get_text('sens_error_range'))
+                         elif step_cases <= 0: st.error("Step must be positive.") # Added check for step
+                         else:
+                             try:
+                                 cases_range_list = list(range(int(min_cases), int(max_cases) + 1, int(step_cases)))
+                                 if not cases_range_list: st.warning(get_text('sens_error_step'))
+                                 else:
+                                     # Ensure calculation inputs are floats
+                                     var_cost_sens = float(service_data_sens[COL_VAR_COST])
+                                     alloc_fixed_sens = float(service_data_sens[COL_ALLOC_FIXED_COST])
+
+                                     prices, break_evens = calculate_sensitivity(
+                                         variable_cost=var_cost_sens,
+                                         allocated_fixed_cost=alloc_fixed_sens,
+                                         margin=float(base_margin), # Use base margin
+                                         cases_range=cases_range_list
+                                     )
+                                     sensitivity_fig = plot_sensitivity(cases_range_list, prices, break_evens)
+                                     if sensitivity_fig:
+                                         st.pyplot(sensitivity_fig)
+                                     # No need for else here, plot_sensitivity handles no data case
+
+                             except ValueError as ve:
+                                  st.error(f"Please ensure Min/Max/Step cases are valid integers. Error: {ve}")
+                             except Exception as e_sens:
+                                  st.error(f"An error occurred during sensitivity analysis: {e_sens}")
+                     else:
+                          st.warning("Selected service data not found in results.")
 
 
 # --- END OF FILE main_redesigned.py ---
